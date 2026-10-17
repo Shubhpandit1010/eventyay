@@ -143,3 +143,37 @@ def test_voucher_csv_download_uses_custom_domain(client, event, ticket, control_
     data_row = rows[1]
     assert data_row[0] == 'CUSTOMDOMAIN'
     assert data_row[1] == 'https://tickets.customdomain.org/redeem/?voucher=CUSTOMDOMAIN'
+
+
+@pytest.mark.django_db
+@override_settings(SITE_URL='https://testserver')
+def test_voucher_csv_download_ignores_foreign_subevent(client, event, ticket, control_user):
+    """Verify that vouchers referencing a subevent of a different event do not include the subevent parameter."""
+    with scopes_disabled():
+        other_event = Event.objects.create(
+            organizer=event.organizer,
+            name='Other Event',
+            slug='other-event',
+            date_from=now(),
+            has_subevents=True,
+        )
+        foreign_subevent = SubEvent.objects.create(
+            event=other_event,
+            name='Foreign Day',
+            date_from=now(),
+            active=True,
+        )
+
+    with scope(organizer=event.organizer):
+        event.vouchers.create(product=ticket, code='FOREIGNSE', subevent=foreign_subevent)
+
+    client.force_login(control_user)
+    url = reverse('control:event.vouchers', kwargs={'organizer': event.organizer.slug, 'event': event.slug})
+    response = client.get(f'{url}?download=yes')
+    assert response.status_code == 200
+
+    reader = csv.reader(io.StringIO(response.content.decode('utf-8')))
+    rows = list(reader)
+    data_row = rows[1]
+    assert data_row[0] == 'FOREIGNSE'
+    assert data_row[1] == 'https://testserver/test-org/test-event/redeem/?voucher=FOREIGNSE'

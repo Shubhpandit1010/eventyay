@@ -131,7 +131,7 @@ class VoucherList(PaginationMixin, EventPermissionRequiredMixin, ListView):
 
         for v in Voucher.annotate_budget_used_orders(self.get_filtered_queryset()):
             url = f'{base_url}?voucher={quote_plus(v.code)}'
-            if v.subevent_id:
+            if v.subevent_id and v.subevent and v.subevent.event_id == self.request.event.pk:
                 url += f'&subevent={v.subevent_id}'
             if v.limit_products.exists() or v.limit_variations.exists():
                 parts = [str(p) for p in v.limit_products.all()]
