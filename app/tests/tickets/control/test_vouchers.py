@@ -112,10 +112,10 @@ class VoucherFormTest(SoupTestMixin, TransactionTestCase):
             self.event.vouchers.create(item=self.ticket, code='ABCDEFG', allow_ignore_approval=True)
         doc = self.client.get('/control/event/%s/%s/vouchers/?download=yes' % (self.orga.slug, self.event.slug))
         assert (
-            doc.content.decode().strip() == '"Voucher code","Valid until","Product","Reserve quota",'
+            doc.content.decode().strip() == '"Voucher code","Voucher link","Valid until","Product","Reserve quota",'
             '"Bypass quota","Bypass approval","Price effect","Value","Tag","Redeemed",'
             '"Maximum usages","Seat","Comment"'
-            '\r\n"ABCDEFG","","Early-bird ticket","No","No","Yes","No effect","","","0",'
+            '\r\n"ABCDEFG","http://testserver/dummy/3030/redeem/?voucher=ABCDEFG","","Early-bird ticket","No","No","Yes","No effect","","","0",'
             '"1","",""'
         )
 
