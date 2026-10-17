@@ -1,11 +1,15 @@
+"""Tests for the Event Settings Contact Organizer configuration."""
+
 import pytest
 from django.test import override_settings
 from django.urls import reverse
+from django_scopes import scope
 
 
 @pytest.mark.django_db
 @override_settings(SITE_URL='https://testserver')
 def test_contact_organizer_settings_rendering(organizer_client, event):
+    """Verify that Contact Organizer label, checkbox, and helper text render with accessible attributes."""
     url = reverse('eventyay_common:event.update', kwargs={'organizer': event.organizer.slug, 'event': event.slug})
     response = organizer_client.get(url)
     assert response.status_code == 200
@@ -15,12 +19,14 @@ def test_contact_organizer_settings_rendering(organizer_client, event):
     assert 'Enable attendees to contact organizers' in content
     assert 'This option enables a contact form that attendees can use to contact an organizer.' in content
     assert 'id_settings-contact_form_enabled' in content
+    assert 'for="id_settings-contact_form_enabled"' in content
     assert 'contact-form-email-fields' in content
 
 
 @pytest.mark.django_db
 @override_settings(SITE_URL='https://testserver')
 def test_contact_organizer_settings_save(organizer_client, event):
+    """Verify that enabling the contact form and providing a valid email saves to event settings."""
     url = reverse('eventyay_common:event.update', kwargs={'organizer': event.organizer.slug, 'event': event.slug})
     response = organizer_client.post(
         url,
@@ -44,14 +50,16 @@ def test_contact_organizer_settings_save(organizer_client, event):
         follow=True,
     )
     assert response.status_code == 200
-    event.settings.flush()
-    assert event.settings.get('contact_form_enabled') is True
-    assert event.settings.get('contact_mail') == 'organizer@example.com'
+    with scope(event=event):
+        event.settings.flush()
+        assert event.settings.get('contact_form_enabled') is True
+        assert event.settings.get('contact_mail') == 'organizer@example.com'
 
 
 @pytest.mark.django_db
 @override_settings(SITE_URL='https://testserver')
 def test_contact_organizer_validation_error_when_email_missing(organizer_client, event):
+    """Verify that enabling the contact form without an email address triggers a form validation error."""
     url = reverse('eventyay_common:event.update', kwargs={'organizer': event.organizer.slug, 'event': event.slug})
     response = organizer_client.post(
         url,
