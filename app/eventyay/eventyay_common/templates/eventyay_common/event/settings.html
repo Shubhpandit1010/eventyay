@@ -84,7 +84,7 @@
                         </label>
                     </div>
                     {% if sform.contact_form_enabled.help_text %}
-                        <div class="help-block text-muted">
+                        <div id="{{ sform.contact_form_enabled.auto_id }}_helptext" class="help-block text-muted">
                             {{ sform.contact_form_enabled.help_text }}
                         </div>
                     {% endif %}

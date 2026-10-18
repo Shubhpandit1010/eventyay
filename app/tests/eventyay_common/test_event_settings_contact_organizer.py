@@ -19,6 +19,7 @@ def test_contact_organizer_settings_rendering(organizer_client, event):
     assert 'Enable attendees to contact organizers' in content
     assert 'This option enables a contact form that attendees can use to contact an organizer.' in content
     assert 'id_settings-contact_form_enabled' in content
+    assert 'id="id_settings-contact_form_enabled_helptext"' in content
     assert 'for="id_settings-contact_form_enabled"' in content
     assert 'contact-form-email-fields' in content
 
