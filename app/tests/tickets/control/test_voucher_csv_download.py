@@ -32,7 +32,7 @@ def event():
 @pytest.fixture
 def ticket(event):
     """Create a sample product ticket."""
-    with scope(organizer=event.organizer):
+    with scope(event=event):
         return Product.objects.create(event=event, name='General Admission', default_price=50, admission=True)
 
 
@@ -51,7 +51,7 @@ def control_user(event):
 @override_settings(SITE_URL='https://testserver')
 def test_voucher_csv_download_includes_direct_link(client, event, ticket, control_user):
     """Verify that the exported CSV includes the Voucher link column and correct redeem URL."""
-    with scope(organizer=event.organizer):
+    with scope(event=event):
         event.vouchers.create(product=ticket, code='PROMO2026', tag='early')
 
     client.force_login(control_user)
@@ -87,7 +87,7 @@ def test_voucher_csv_download_with_subevent_link(client, event, ticket, control_
             active=True,
         )
 
-    with scope(organizer=event.organizer):
+    with scope(event=event):
         event.vouchers.create(product=ticket, code='DAY1PASS', subevent=subevent)
 
     client.force_login(control_user)
@@ -107,7 +107,7 @@ def test_voucher_csv_download_with_subevent_link(client, event, ticket, control_
 def test_voucher_csv_download_encodes_special_characters_in_code(client, event, ticket, control_user):
     """Verify that special characters in voucher codes are properly URL-encoded in the exported link."""
     special_code = 'SPECIAL CODE & MORE'
-    with scope(organizer=event.organizer):
+    with scope(event=event):
         event.vouchers.create(product=ticket, code=special_code)
 
     client.force_login(control_user)
@@ -130,7 +130,7 @@ def test_voucher_csv_download_uses_custom_domain(client, event, ticket, control_
     with scopes_disabled():
         KnownDomain.objects.create(event=event, domainname='tickets.customdomain.org')
 
-    with scope(organizer=event.organizer):
+    with scope(event=event):
         event.vouchers.create(product=ticket, code='CUSTOMDOMAIN')
 
     client.force_login(control_user)
@@ -164,7 +164,7 @@ def test_voucher_csv_download_ignores_foreign_subevent(client, event, ticket, co
             active=True,
         )
 
-    with scope(organizer=event.organizer):
+    with scope(event=event):
         event.vouchers.create(product=ticket, code='FOREIGNSE', subevent=foreign_subevent)
 
     client.force_login(control_user)
