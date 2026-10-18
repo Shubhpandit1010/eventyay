@@ -177,3 +177,33 @@ def test_voucher_csv_download_ignores_foreign_subevent(client, event, ticket, co
     data_row = rows[1]
     assert data_row[0] == 'FOREIGNSE'
     assert data_row[1] == 'https://testserver/test-org/test-event/redeem/?voucher=FOREIGNSE'
+
+
+@pytest.mark.django_db
+@override_settings(SITE_URL='https://testserver')
+def test_voucher_csv_download_ignores_inactive_subevent(client, event, ticket, control_user):
+    """Verify that vouchers referencing an inactive subevent do not include the subevent parameter."""
+    with scopes_disabled():
+        event.has_subevents = True
+        event.save()
+        inactive_subevent = SubEvent.objects.create(
+            event=event,
+            name='Inactive Day',
+            date_from=now(),
+            active=False,
+        )
+
+    with scope(event=event):
+        event.vouchers.create(product=ticket, code='INACTIVEDAY', subevent=inactive_subevent)
+
+    client.force_login(control_user)
+    url = reverse('control:event.vouchers', kwargs={'organizer': event.organizer.slug, 'event': event.slug})
+    response = client.get(f'{url}?download=yes')
+    assert response.status_code == 200
+
+    reader = csv.reader(io.StringIO(response.content.decode('utf-8')))
+    rows = list(reader)
+    data_row = rows[1]
+    assert data_row[0] == 'INACTIVEDAY'
+    assert data_row[1] == 'https://testserver/test-org/test-event/redeem/?voucher=INACTIVEDAY'
+
