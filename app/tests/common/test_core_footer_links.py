@@ -6,26 +6,28 @@ from bs4 import BeautifulSoup
 from django import forms as dj_forms
 from django.conf import settings
 from django.contrib.auth.models import AnonymousUser
+from django.core.exceptions import ValidationError
 from django.http import Http404
 from django.template.loader import render_to_string
 
 from eventyay.base.models.page import (
     Page,
+    get_visible_system_pages,
     is_builtin_page_url,
     is_content_empty,
     is_external_url,
+    is_system_page_configured,
+    validate_footer_url,
 )
 from eventyay.common.context_processors import system_information
 from eventyay.common.forms.fields import I18nRichTextFormField
 from eventyay.common.forms.widgets import I18nRichTextWidget
-from eventyay.control.forms import MultipleLanguagesWidget
-from eventyay.control.forms.global_settings import GlobalSettingsForm
-from eventyay.control.forms.pages_admin import DefaultPageContentForm
+from eventyay.control.forms.pages_admin import DefaultPageContentForm, FooterContentForm
 from eventyay.control.views.pages import ShowPageView, SystemPageView
 
 
 def _make_mock_settings(stored=None):
-    # Mock settings store matching hierarkey get(key, default=None, as_type=None) signature
+    """Create a mock settings store matching hierarkey get/set signature."""
     data = dict(stored or {})
     mock_settings = MagicMock()
     mock_settings._parent = None
@@ -71,91 +73,104 @@ def _make_mock_settings(stored=None):
     return mock_settings
 
 
-def test_global_settings_form_footer_defaults():
-    # Verify all expected footer link and page fields are registered
-    with patch('eventyay.control.forms.global_settings.GlobalSettingsObject') as mock_gso:
-        mock_gso.return_value.settings = _make_mock_settings()
-        form = GlobalSettingsForm()
-        for key in ['events', 'terms', 'privacy', 'pricing', 'documentation', 'support']:
-            assert f'footer_link_{key}_enabled' in form.fields
-            assert f'footer_link_{key}_url' in form.fields
-        for page_key in ['terms', 'privacy', 'pricing', 'support']:
-            field_name = f'footer_page_{page_key}_text'
-            assert field_name in form.fields
-            assert isinstance(form.fields[field_name], I18nRichTextFormField)
-            assert isinstance(form.fields[field_name].widget, I18nRichTextWidget)
+def _render_page_template(template_name, context, request=None):
+    """Render a template with privacy consent and event signals safely mocked for unit tests."""
+    mock_gso = MagicMock()
+    mock_gso.settings.get.return_value = None
+    with (
+        patch('eventyay.base.templatetags.privacy_consent.GlobalSettingsObject', return_value=mock_gso),
+        patch('eventyay.base.templatetags.privacy_consent.external_cmp_script', return_value=''),
+        patch('eventyay.base.templatetags.privacy_consent.consent_config', return_value='{}'),
+        patch('eventyay.base.templatetags.privacy_consent.consent_provider', return_value='disabled'),
+        patch('eventyay.base.templatetags.privacy_consent.cookie_policy_url', return_value=''),
+        patch('eventyay.base.templatetags.privacy_consent.build_consent_config', return_value=None),
+        patch('eventyay.common.signals.user_dashboard_links.send', return_value=[]),
+    ):
+        return render_to_string(template_name, context, request=request)
 
 
-def test_global_settings_form_has_page_locales_field():
-    # Verify page_locales field configuration and widget type
-    with patch('eventyay.control.forms.global_settings.GlobalSettingsObject') as mock_gso:
-        mock_gso.return_value.settings = _make_mock_settings()
-        form = GlobalSettingsForm()
-        assert 'page_locales' in form.fields
-        assert isinstance(form.fields['page_locales'].widget, MultipleLanguagesWidget)
-        assert form.initial.get('page_locales') == ['en']
+def test_footer_content_form_footer_defaults():
+    """Verify all expected footer link and page fields are registered on pages admin forms."""
+    mock_obj = MagicMock()
+    mock_obj.settings = _make_mock_settings()
+    form = FooterContentForm(obj=mock_obj)
+    for key in ['events', 'terms', 'privacy', 'pricing', 'documentation', 'support']:
+        assert f'footer_link_{key}_enabled' in form.fields
+        assert f'footer_link_{key}_url' in form.fields
+    for page_key in ['terms', 'privacy', 'pricing', 'support']:
+        page_form = DefaultPageContentForm(obj=mock_obj, slug=page_key)
+        field_name = f'footer_page_{page_key}_text'
+        assert field_name in page_form.fields
+        assert isinstance(page_form.fields[field_name], I18nRichTextFormField)
+        assert isinstance(page_form.fields[field_name].widget, I18nRichTextWidget)
 
 
-def test_page_locales_in_pages_field_group():
-    # Verify page_locales is the first field in the pages tab group
-    with patch('eventyay.control.forms.global_settings.GlobalSettingsObject') as mock_gso:
-        mock_gso.return_value.settings = _make_mock_settings()
-        form = GlobalSettingsForm()
-        pages_group = next((fnames for key, _, fnames in form.field_groups if key == 'pages'), None)
-        assert pages_group is not None
-        assert pages_group[0] == 'page_locales'
+def test_page_content_form_has_page_locales_field():
+    """Verify page_locales field configuration and widget type on pages admin forms."""
+    mock_obj = MagicMock()
+    mock_obj.settings = _make_mock_settings()
+    form = FooterContentForm(obj=mock_obj)
+    assert 'page_locales' in form.fields
+    assert isinstance(form.fields['page_locales'].widget, dj_forms.MultipleHiddenInput)
+    assert form.initial.get('page_locales') == ['en']
 
 
 def test_page_locales_defaults_to_english():
-    # Verify default page locales sets initial to English
-    with patch('eventyay.control.forms.global_settings.GlobalSettingsObject') as mock_gso:
-        mock_gso.return_value.settings = _make_mock_settings()
-        form = GlobalSettingsForm()
-        assert form.initial.get('page_locales') == ['en']
+    """Verify default page locales sets initial to English."""
+    mock_obj = MagicMock()
+    mock_obj.settings = _make_mock_settings()
+    form = FooterContentForm(obj=mock_obj)
+    assert form._page_locales == ['en']
 
 
 def test_page_locales_preserves_saved_value():
-    # Verify saved page locales are loaded into form initial
-    with patch('eventyay.control.forms.global_settings.GlobalSettingsObject') as mock_gso:
-        mock_gso.return_value.settings = _make_mock_settings({
+    """Verify saved page locales are loaded into form initial."""
+    mock_obj = MagicMock()
+    mock_obj.settings = _make_mock_settings(
+        {
             'page_locales': json.dumps(['en', 'de']),
-        })
-        form = GlobalSettingsForm()
-        assert form.initial.get('page_locales') == ['en', 'de']
+        }
+    )
+    form = FooterContentForm(obj=mock_obj)
+    assert form._page_locales == ['en', 'de']
 
 
 def test_page_locales_auto_includes_existing_content_locales():
-    # Verify existing translations are auto-included in page locales initial
-    with patch('eventyay.control.forms.global_settings.GlobalSettingsObject') as mock_gso:
-        mock_gso.return_value.settings = _make_mock_settings({
+    """Verify existing translations are auto-included in page locales initial."""
+    mock_obj = MagicMock()
+    mock_obj.settings = _make_mock_settings(
+        {
             'page_locales': json.dumps(['en']),
             'footer_page_terms_text': json.dumps({'en': 'Terms', 'fr': 'Conditions'}),
-        })
-        form = GlobalSettingsForm()
-        assert set(form.initial.get('page_locales')) == {'en', 'fr'}
+        }
+    )
+    form = DefaultPageContentForm(obj=mock_obj, slug='terms')
+    assert set(form._page_locales) == {'en', 'fr'}
 
 
-def test_global_settings_form_save_persists_page_locales():
-    # Verify full form validation and save cycle persists page_locales
+def test_page_content_form_save_persists_page_locales():
+    """Verify full form validation and save cycle persists page_locales."""
     mock_settings = _make_mock_settings({'page_locales': json.dumps(['en'])})
-    with patch('eventyay.control.forms.global_settings.GlobalSettingsObject') as mock_gso:
-        mock_gso.return_value.settings = mock_settings
-        unbound = GlobalSettingsForm()
-        post_data = {k: v for k, v in unbound.initial.items() if v is not None}
-        post_data['page_locales'] = ['en', 'de', 'es']
-        form = GlobalSettingsForm(data=post_data)
-        assert form.is_valid(), form.errors
-        form.save()
-        saved = mock_settings.get('page_locales')
-        assert (json.loads(saved) if isinstance(saved, str) else saved) == ['en', 'de', 'es']
+    mock_obj = MagicMock()
+    mock_obj.settings = mock_settings
+    unbound = FooterContentForm(obj=mock_obj)
+    post_data = {k: v for k, v in unbound.initial.items() if v is not None}
+    post_data['page_locales'] = ['en', 'de', 'es']
+    form = FooterContentForm(obj=mock_obj, data=post_data)
+    assert form.is_valid(), form.errors
+    form.save()
+    saved = mock_settings.get('page_locales')
+    assert (json.loads(saved) if isinstance(saved, str) else saved) == ['en', 'de', 'es']
 
 
 def test_i18n_richtext_widget_renders_all_locales():
-    # Verify widget renders all configured locales with data-lang, tiptap wrapper and profile
+    """Verify widget renders all configured locales with data-lang, tiptap wrapper and profile."""
     field = dj_forms.CharField()
     widget = I18nRichTextWidget(locales=['en', 'de', 'fr'], field=field)
 
-    html = widget.render('test_field', {'en': '<p>Hello</p>', 'de': '<p>Hallo</p>', 'fr': '<p>Bonjour</p>'}, attrs={'id': 'id_test'})
+    html = widget.render(
+        'test_field', {'en': '<p>Hello</p>', 'de': '<p>Hallo</p>', 'fr': '<p>Bonjour</p>'}, attrs={'id': 'id_test'}
+    )
     assert 'data-lang="en"' in html
     assert 'data-lang="de"' in html
     assert 'data-lang="fr"' in html
@@ -167,8 +182,9 @@ def test_i18n_richtext_widget_renders_all_locales():
 
 
 def test_i18n_richtext_form_field_sanitizes():
-    # Verify I18nRichTextFormField sanitizes malicious HTML tags
+    """Verify I18nRichTextFormField sanitizes malicious HTML tags."""
     from i18nfield.strings import LazyI18nString
+
     field = I18nRichTextFormField(locales=['en', 'de'], required=False)
     result = field.clean(['<p>Terms</p><script>alert(1)</script>', '<p>Bedingungen</p>'])
     assert isinstance(result, LazyI18nString)
@@ -177,21 +193,23 @@ def test_i18n_richtext_form_field_sanitizes():
 
 
 def test_context_processor_core_footer_links(rf):
-    # Verify system_information context processor populates core footer links
+    """Verify system_information context processor populates core footer links."""
     request = rf.get('/')
     with patch('eventyay.common.context_processors.GlobalSettingsObject') as mock_gso:
-        mock_settings = _make_mock_settings({
-            'footer_link_events_enabled': True,
-            'footer_link_terms_enabled': True,
-            'footer_page_terms_text': 'Terms text',
-            'footer_link_privacy_enabled': True,
-            'footer_page_privacy_text': 'Privacy text',
-            'footer_link_pricing_enabled': True,
-            'footer_page_pricing_text': 'Pricing text',
-            'footer_link_documentation_enabled': True,
-            'footer_link_support_enabled': True,
-            'footer_page_support_text': 'Support text',
-        })
+        mock_settings = _make_mock_settings(
+            {
+                'footer_link_events_enabled': True,
+                'footer_link_terms_enabled': True,
+                'footer_page_terms_text': 'Terms text',
+                'footer_link_privacy_enabled': True,
+                'footer_page_privacy_text': 'Privacy text',
+                'footer_link_pricing_enabled': True,
+                'footer_page_pricing_text': 'Pricing text',
+                'footer_link_documentation_enabled': True,
+                'footer_link_support_enabled': True,
+                'footer_page_support_text': 'Support text',
+            }
+        )
         mock_gso.return_value.settings = mock_settings
         ctx = system_information(request)
         assert 'core_footer_links' in ctx
@@ -201,21 +219,23 @@ def test_context_processor_core_footer_links(rf):
 
 
 def test_context_processor_excludes_disabled_footer_links(rf):
-    # Verify disabled footer links are excluded from context processor output
+    """Verify disabled footer links are excluded from context processor output."""
     request = rf.get('/')
     with patch('eventyay.common.context_processors.GlobalSettingsObject') as mock_gso:
-        mock_settings = _make_mock_settings({
-            'footer_link_events_enabled': True,
-            'footer_link_terms_enabled': False,
-            'footer_page_terms_text': 'Terms text',
-            'footer_link_privacy_enabled': True,
-            'footer_page_privacy_text': 'Privacy text',
-            'footer_link_pricing_enabled': False,
-            'footer_page_pricing_text': 'Pricing text',
-            'footer_link_documentation_enabled': True,
-            'footer_link_support_enabled': False,
-            'footer_page_support_text': 'Support text',
-        })
+        mock_settings = _make_mock_settings(
+            {
+                'footer_link_events_enabled': True,
+                'footer_link_terms_enabled': False,
+                'footer_page_terms_text': 'Terms text',
+                'footer_link_privacy_enabled': True,
+                'footer_page_privacy_text': 'Privacy text',
+                'footer_link_pricing_enabled': False,
+                'footer_page_pricing_text': 'Pricing text',
+                'footer_link_documentation_enabled': True,
+                'footer_link_support_enabled': False,
+                'footer_page_support_text': 'Support text',
+            }
+        )
         mock_gso.return_value.settings = mock_settings
         ctx = system_information(request)
         keys = [link['key'] for link in ctx['core_footer_links']]
@@ -228,20 +248,22 @@ def test_context_processor_excludes_disabled_footer_links(rf):
 
 
 def test_context_processor_excludes_unconfigured_footer_links(rf):
-    # Verify unconfigured system pages are excluded from core footer links
+    """Verify unconfigured system pages are excluded from core footer links."""
     request = rf.get('/')
     with patch('eventyay.common.context_processors.GlobalSettingsObject') as mock_gso:
-        mock_settings = _make_mock_settings({
-            'footer_link_events_enabled': True,
-            'footer_link_terms_enabled': True,
-            # terms text is not configured
-            'footer_link_privacy_enabled': True,
-            'footer_page_privacy_text': 'Privacy configured',
-            'footer_link_documentation_enabled': True,
-        })
+        mock_settings = _make_mock_settings(
+            {
+                'footer_link_events_enabled': True,
+                'footer_link_terms_enabled': True,
+                # terms text is not configured
+                'footer_link_privacy_enabled': True,
+                'footer_page_privacy_text': 'Privacy configured',
+                'footer_link_documentation_enabled': True,
+            }
+        )
         mock_gso.return_value.settings = mock_settings
         with patch('eventyay.base.models.page.Page.objects.filter') as mock_filter:
-            mock_filter.return_value.first.return_value = None
+            mock_filter.return_value = []
             ctx = system_information(request)
             keys = [link['key'] for link in ctx['core_footer_links']]
             assert 'terms' not in keys
@@ -251,27 +273,29 @@ def test_context_processor_excludes_unconfigured_footer_links(rf):
 
 
 def test_context_processor_handles_external_and_same_site_footer_urls(rf):
-    # Verify external destinations remain visible without local content, while same-site absolute URLs are checked
+    """Verify external destinations remain visible without local content, while same-site absolute URLs are checked."""
     request = rf.get('/')
     with patch('django.conf.settings.SITE_URL', 'https://eventyay.com'):
         with patch('django.conf.settings.SITE_NETLOC', 'eventyay.com'):
             with patch('eventyay.common.context_processors.GlobalSettingsObject') as mock_gso:
-                mock_settings = _make_mock_settings({
-                    'footer_link_events_enabled': True,
-                    # Terms points to an external site, local content is unconfigured
-                    'footer_link_terms_enabled': True,
-                    'footer_link_terms_url': 'HTTP://EXTERNAL-LEGAL.COM/terms',
-                    # Privacy points to a same-site absolute URL, local content is unconfigured
-                    'footer_link_privacy_enabled': True,
-                    'footer_link_privacy_url': 'https://eventyay.com/privacy',
-                    # Pricing points to a same-site absolute URL, local content IS configured
-                    'footer_link_pricing_enabled': True,
-                    'footer_link_pricing_url': 'https://eventyay.com/pricing',
-                    'footer_page_pricing_text': 'Pricing info',
-                })
+                mock_settings = _make_mock_settings(
+                    {
+                        'footer_link_events_enabled': True,
+                        # Terms points to an external site, local content is unconfigured
+                        'footer_link_terms_enabled': True,
+                        'footer_link_terms_url': 'HTTP://EXTERNAL-LEGAL.COM/terms',
+                        # Privacy points to a same-site absolute URL, local content is unconfigured
+                        'footer_link_privacy_enabled': True,
+                        'footer_link_privacy_url': 'https://eventyay.com/privacy',
+                        # Pricing points to a same-site absolute URL, local content IS configured
+                        'footer_link_pricing_enabled': True,
+                        'footer_link_pricing_url': 'https://eventyay.com/pricing',
+                        'footer_page_pricing_text': 'Pricing info',
+                    }
+                )
                 mock_gso.return_value.settings = mock_settings
                 with patch('eventyay.base.models.page.Page.objects.filter') as mock_filter:
-                    mock_filter.return_value.first.return_value = None
+                    mock_filter.return_value = []
                     ctx = system_information(request)
                     links_by_key = {link['key']: link for link in ctx['core_footer_links']}
 
@@ -288,9 +312,8 @@ def test_context_processor_handles_external_and_same_site_footer_urls(rf):
                     assert links_by_key['pricing']['target_blank'] is False
 
 
-
 def test_system_page_view_slug_handling():
-    # Verify SystemPageView resolves slug from attribute and URL kwargs
+    """Verify SystemPageView resolves slug from attribute and URL kwargs."""
     view = SystemPageView()
     view.slug = 'terms'
     assert view.get_slug() == 'terms'
@@ -304,10 +327,12 @@ def test_system_page_view_slug_handling():
         mock_page_privacy = MagicMock(title='Privacy Policy', slug='privacy', text='Privacy text')
         mock_get.side_effect = lambda slug: mock_page_privacy if slug == 'privacy' else mock_page_terms
         with patch('eventyay.control.views.pages.GlobalSettingsObject') as mock_gso:
-            mock_settings = _make_mock_settings({
-                'footer_link_terms_enabled': True,
-                'footer_link_privacy_enabled': True,
-            })
+            mock_settings = _make_mock_settings(
+                {
+                    'footer_link_terms_enabled': True,
+                    'footer_link_privacy_enabled': True,
+                }
+            )
             mock_gso.return_value.settings = mock_settings
 
             assert view.get_page() == mock_page_terms
@@ -315,16 +340,18 @@ def test_system_page_view_slug_handling():
 
 
 def test_system_page_view_custom_content():
-    # Verify SystemPageView falls back to custom global setting content
+    """Verify SystemPageView falls back to custom global setting content."""
     view = SystemPageView()
     view.slug = 'privacy'
 
     with patch('eventyay.control.views.pages.Page.objects.get', side_effect=Page.DoesNotExist):
         with patch('eventyay.control.views.pages.GlobalSettingsObject') as mock_gso:
-            mock_settings = _make_mock_settings({
-                'footer_link_privacy_enabled': True,
-                'footer_page_privacy_text': '# Custom Privacy Content',
-            })
+            mock_settings = _make_mock_settings(
+                {
+                    'footer_link_privacy_enabled': True,
+                    'footer_page_privacy_text': '# Custom Privacy Content',
+                }
+            )
             mock_gso.return_value.settings = mock_settings
             page = view.get_page()
             assert page.title == 'Privacy Policy'
@@ -332,63 +359,71 @@ def test_system_page_view_custom_content():
 
 
 def test_system_page_view_unconfigured_returns_404():
-    # Verify SystemPageView raises Http404 when content is unconfigured
+    """Verify SystemPageView raises Http404 when content is unconfigured."""
     view = SystemPageView()
     view.slug = 'terms'
 
     with patch('eventyay.control.views.pages.Page.objects.get', side_effect=Page.DoesNotExist):
         with patch('eventyay.control.views.pages.GlobalSettingsObject') as mock_gso:
-            mock_settings = _make_mock_settings({
-                'footer_link_terms_enabled': True,
-            })
+            mock_settings = _make_mock_settings(
+                {
+                    'footer_link_terms_enabled': True,
+                }
+            )
             mock_gso.return_value.settings = mock_settings
             with pytest.raises(Http404):
                 view.get_page()
 
 
 def test_system_page_view_disabled_returns_404():
-    # Verify SystemPageView raises Http404 when page is disabled
+    """Verify SystemPageView raises Http404 when page is disabled."""
     view = SystemPageView()
     view.slug = 'terms'
 
     with patch('eventyay.control.views.pages.GlobalSettingsObject') as mock_gso:
-        mock_settings = _make_mock_settings({
-            'footer_link_terms_enabled': False,
-            'footer_page_terms_text': '# Terms content',
-        })
+        mock_settings = _make_mock_settings(
+            {
+                'footer_link_terms_enabled': False,
+                'footer_page_terms_text': '# Terms content',
+            }
+        )
         mock_gso.return_value.settings = mock_settings
         with pytest.raises(Http404):
             view.get_page()
 
 
 def test_system_page_view_empty_db_page_returns_404():
-    # Verify SystemPageView raises Http404 when database page has empty content
+    """Verify SystemPageView raises Http404 when database page has empty content."""
     view = SystemPageView()
     view.slug = 'terms'
 
     with patch('eventyay.control.views.pages.Page.objects.get') as mock_get:
         mock_get.return_value = MagicMock(title='Terms', slug='terms', text='')
         with patch('eventyay.control.views.pages.GlobalSettingsObject') as mock_gso:
-            mock_settings = _make_mock_settings({
-                'footer_link_terms_enabled': True,
-            })
+            mock_settings = _make_mock_settings(
+                {
+                    'footer_link_terms_enabled': True,
+                }
+            )
             mock_gso.return_value.settings = mock_settings
             with pytest.raises(Http404):
                 view.get_page()
 
 
 def test_system_page_view_blank_db_page_serves_settings_text():
-    # Verify SystemPageView treats blank DB page as absent and serves settings text
+    """Verify SystemPageView treats blank DB page as absent and serves settings text."""
     view = SystemPageView()
     view.slug = 'terms'
 
     with patch('eventyay.control.views.pages.Page.objects.get') as mock_get:
         mock_get.return_value = MagicMock(title='Terms', slug='terms', text='')
         with patch('eventyay.control.views.pages.GlobalSettingsObject') as mock_gso:
-            mock_settings = _make_mock_settings({
-                'footer_link_terms_enabled': True,
-                'footer_page_terms_text': '# Terms from settings',
-            })
+            mock_settings = _make_mock_settings(
+                {
+                    'footer_link_terms_enabled': True,
+                    'footer_page_terms_text': '# Terms from settings',
+                }
+            )
             mock_gso.return_value.settings = mock_settings
             page = view.get_page()
             assert page.title == 'Terms of Service'
@@ -396,21 +431,23 @@ def test_system_page_view_blank_db_page_serves_settings_text():
 
 
 def test_show_page_view_disabled_system_page_returns_404():
-    # Verify ShowPageView enforces enabled check for system-page slugs
+    """Verify ShowPageView enforces enabled check for system-page slugs."""
     view = ShowPageView()
     view.kwargs = {'slug': 'terms'}
 
     with patch('eventyay.control.views.pages.GlobalSettingsObject') as mock_gso:
-        mock_settings = _make_mock_settings({
-            'footer_link_terms_enabled': False,
-        })
+        mock_settings = _make_mock_settings(
+            {
+                'footer_link_terms_enabled': False,
+            }
+        )
         mock_gso.return_value.settings = mock_settings
         with pytest.raises(Http404):
             view.get_page()
 
 
 def test_show_page_view_serves_custom_page():
-    # Verify ShowPageView serves non-system custom page normally
+    """Verify ShowPageView serves non-system custom page normally."""
     view = ShowPageView()
     view.kwargs = {'slug': 'about-us'}
 
@@ -421,7 +458,7 @@ def test_show_page_view_serves_custom_page():
 
 
 def test_builtin_and_external_url_classification():
-    # Verify accurate classification without relying on lowercase prefix checks
+    """Verify accurate classification without relying on lowercase prefix checks."""
     with patch('django.conf.settings.SITE_URL', 'https://eventyay.com'):
         with patch('django.conf.settings.SITE_NETLOC', 'eventyay.com'):
             # Built-in relative paths
@@ -443,9 +480,8 @@ def test_builtin_and_external_url_classification():
             assert is_external_url('mailto:support@eventyay.com') is True
 
 
-
 def test_is_content_empty_helper():
-    # Verify is_content_empty detects empty values, blank translations, and valid content
+    """Verify is_content_empty detects empty values, blank translations, and valid content."""
     from i18nfield.strings import LazyI18nString
 
     assert is_content_empty(None) is True
@@ -459,9 +495,8 @@ def test_is_content_empty_helper():
     assert is_content_empty('# Custom Content') is False
 
 
-@pytest.mark.django_db
 def test_default_page_content_form_field_attributes():
-    # Verify DefaultPageContentForm builds enabled toggle with active/enable label and help text
+    """Verify DefaultPageContentForm builds enabled toggle with active/enable label and help text."""
     mock_obj = MagicMock()
     mock_obj.settings = _make_mock_settings()
     form = DefaultPageContentForm(obj=mock_obj, slug='terms')
@@ -472,13 +507,13 @@ def test_default_page_content_form_field_attributes():
 
 
 def test_core_footer_template_structure():
-    # Verify core footer template renders links and handles external targets
+    """Verify core footer template renders links and handles external targets."""
     sample_links = [
         {'key': 'events', 'label': 'Events', 'url': '/upcoming', 'target_blank': False},
         {'key': 'terms', 'label': 'Terms', 'url': '/terms', 'target_blank': False},
         {'key': 'documentation', 'label': 'Documentation', 'url': 'https://docs.eventyay.com', 'target_blank': True},
     ]
-    html = render_to_string('common/includes/core_footer.html', {'core_footer_links': sample_links})
+    html = _render_page_template('common/includes/core_footer.html', {'core_footer_links': sample_links})
     soup = BeautifulSoup(html, 'html.parser')
 
     assert soup.find('nav', class_='core-footer-nav') is not None
@@ -503,17 +538,21 @@ def test_core_footer_template_structure():
 
 
 def test_footer_context_renders_correctly(rf):
-    # Verify template renders correctly from real context processor output
+    """Verify template renders correctly from real context processor output."""
     request = rf.get('/')
     with patch('eventyay.common.context_processors.GlobalSettingsObject') as mock_gso:
-        mock_settings = _make_mock_settings({
-            'footer_link_events_enabled': True,
-            'footer_link_terms_enabled': True,
-            'footer_link_documentation_enabled': True,
-        })
+        mock_settings = _make_mock_settings(
+            {
+                'footer_link_events_enabled': True,
+                'footer_link_terms_enabled': True,
+                'footer_page_terms_text': 'Terms of service content',
+                'footer_link_documentation_enabled': True,
+            }
+        )
         mock_gso.return_value.settings = mock_settings
-        ctx = system_information(request)
-        html = render_to_string('common/includes/core_footer.html', ctx)
+        with patch('eventyay.base.models.page.Page.objects.filter', return_value=[]):
+            ctx = system_information(request)
+            html = _render_page_template('common/includes/core_footer.html', ctx)
         soup = BeautifulSoup(html, 'html.parser')
         assert soup.find('a', href=lambda h: h and 'upcoming' in h) is not None
         assert soup.find('a', href=lambda h: h and 'terms' in h) is not None
@@ -521,7 +560,7 @@ def test_footer_context_renders_correctly(rf):
 
 
 def test_public_pages_base_template_unauthenticated(rf):
-    # Verify public page shell renders language switcher, login link, and no sidebar for guests
+    """Verify public page shell renders language switcher, login link, and no sidebar for guests."""
     request = rf.get('/terms/')
     request.user = AnonymousUser()
     request.LANGUAGE_CODE = 'en'
@@ -536,7 +575,7 @@ def test_public_pages_base_template_unauthenticated(rf):
         'core_footer_links': [],
         'django_settings': settings,
     }
-    html = render_to_string('pretixcontrol/admin/pages/show.html', context)
+    html = _render_page_template('pretixcontrol/admin/pages/show.html', context)
     soup = BeautifulSoup(html, 'html.parser')
 
     assert soup.find('details', id='language-dropdown') is not None
@@ -546,9 +585,11 @@ def test_public_pages_base_template_unauthenticated(rf):
 
 
 def test_public_pages_base_template_authenticated(rf):
-    # Verify public page shell renders language switcher, profile dropdown, and sidebar for logged-in users
+    """Verify public page shell renders language switcher, profile dropdown, and sidebar for logged-in users."""
     request = rf.get('/terms/')
     user = MagicMock(is_authenticated=True, is_staff=False, email='user@eventyay.com', fullname='Test User')
+    user.id = 1
+    user.pk = 1
     request.user = user
     request.LANGUAGE_CODE = 'en'
 
@@ -566,7 +607,7 @@ def test_public_pages_base_template_authenticated(rf):
         'core_footer_links': [],
         'django_settings': settings,
     }
-    html = render_to_string('pretixcontrol/admin/pages/show.html', context)
+    html = _render_page_template('pretixcontrol/admin/pages/show.html', context)
     soup = BeautifulSoup(html, 'html.parser')
 
     assert soup.find('details', id='language-dropdown') is not None
@@ -578,9 +619,17 @@ def test_public_pages_base_template_authenticated(rf):
 
 
 def test_global_settings_page_preview_form_encoded(rf):
+    """Verify page preview endpoint handles form-encoded input data."""
     from eventyay.control.views.global_settings import GlobalSettingsPagePreviewView
+
     view = GlobalSettingsPagePreviewView.as_view()
-    user = MagicMock(is_authenticated=True, is_staff=True, is_administrator=True, is_active=True, has_active_staff_session=MagicMock(return_value=True))
+    user = MagicMock(
+        is_authenticated=True,
+        is_staff=True,
+        is_administrator=True,
+        is_active=True,
+        has_active_staff_session=MagicMock(return_value=True),
+    )
     request = rf.post(
         '/admin/global/settings/preview/',
         data={'body_en': '<p>Hello <strong>World</strong><script>alert(1)</script></p>', 'body_de': '<p>Hallo</p>'},
@@ -598,9 +647,17 @@ def test_global_settings_page_preview_form_encoded(rf):
 
 
 def test_global_settings_page_preview_json_payload(rf):
+    """Verify page preview endpoint handles JSON payload and sanitizes script tags."""
     from eventyay.control.views.global_settings import GlobalSettingsPagePreviewView
+
     view = GlobalSettingsPagePreviewView.as_view()
-    user = MagicMock(is_authenticated=True, is_staff=True, is_administrator=True, is_active=True, has_active_staff_session=MagicMock(return_value=True))
+    user = MagicMock(
+        is_authenticated=True,
+        is_staff=True,
+        is_administrator=True,
+        is_active=True,
+        has_active_staff_session=MagicMock(return_value=True),
+    )
     request = rf.post(
         '/admin/global/settings/preview/',
         data=json.dumps({'html': '<p>Preview text <script>bad()</script></p>'}),
@@ -617,3 +674,92 @@ def test_global_settings_page_preview_json_payload(rf):
     assert '<script>' not in data['html']
 
 
+def test_is_content_empty_with_rich_text_html():
+    """Verify is_content_empty normalizes rich-text HTML values and treats markup-only content as empty."""
+    assert is_content_empty('<p></p>') is True
+    assert is_content_empty('<p><br></p>') is True
+    assert is_content_empty('<p><br/></p>') is True
+    assert is_content_empty('<p>&nbsp;</p>') is True
+    assert is_content_empty('<p>   </p>') is True
+    assert is_content_empty('<p>Actual content</p>') is False
+    assert is_content_empty({'en': '<p></p>', 'de': '<p><br></p>'}) is True
+    assert is_content_empty({'en': '<p>Actual content</p>', 'de': ''}) is False
+
+
+def test_validate_footer_url():
+    """Verify validate_footer_url accepts valid URLs and paths while rejecting malformed URLs."""
+    validate_footer_url('')
+    validate_footer_url(None)
+    validate_footer_url('/terms')
+    validate_footer_url('/page/terms/')
+    validate_footer_url('https://docs.eventyay.com')
+    validate_footer_url('mailto:support@eventyay.com')
+
+    with pytest.raises(ValidationError):
+        validate_footer_url('http://[broken')
+
+
+def test_url_helpers_malformed_url_safety():
+    """Verify is_builtin_page_url and is_external_url handle malformed URLs gracefully without raising ValueError."""
+    assert is_builtin_page_url('http://[broken') is False
+    assert is_external_url('http://[broken') is False
+
+
+def test_get_visible_system_pages_excludes_disabled():
+    """Verify get_visible_system_pages excludes system pages whose footer link is disabled."""
+    mock_qs = MagicMock()
+    with patch('eventyay.base.models.page.Page.objects.filter', return_value=mock_qs) as mock_filter:
+        mock_settings = _make_mock_settings(
+            {
+                'footer_link_terms_enabled': False,
+                'footer_link_privacy_enabled': True,
+            }
+        )
+        get_visible_system_pages('link_in_header', gs=mock_settings)
+        mock_filter.assert_called_once_with(link_in_system=True, link_in_header=True)
+        mock_qs.exclude.assert_called_once_with(slug__in=['terms'])
+
+
+def test_footer_content_form_url_validation():
+    """Verify FooterContentForm validates URLs and rejects malformed values."""
+    mock_obj = MagicMock()
+    mock_obj.settings = _make_mock_settings()
+    form = FooterContentForm(
+        obj=mock_obj,
+        data={
+            'footer_link_terms_url': 'http://[broken',
+        },
+    )
+    assert not form.is_valid()
+    assert 'footer_link_terms_url' in form.errors
+
+
+def test_default_page_content_form_url_validation():
+    """Verify DefaultPageContentForm validates URL field and rejects malformed values."""
+    mock_obj = MagicMock()
+    mock_obj.settings = _make_mock_settings()
+    form = DefaultPageContentForm(
+        obj=mock_obj,
+        slug='terms',
+        data={
+            'footer_link_terms_url': 'http://[broken',
+        },
+    )
+    assert not form.is_valid()
+    assert 'footer_link_terms_url' in form.errors
+
+
+def test_is_system_page_configured_with_prefetched_db_pages():
+    """Verify is_system_page_configured uses db_pages_with_content set when provided."""
+    with patch('eventyay.base.models.page.GlobalSettingsObject') as mock_gso:
+        mock_settings = _make_mock_settings()
+        mock_gso.return_value.settings = mock_settings
+
+        with patch('eventyay.base.models.page.Page.objects.filter') as mock_filter:
+            # When pre-fetched set includes slug, returns True without querying DB
+            assert is_system_page_configured('terms', gs=mock_settings, db_pages_with_content={'terms'}) is True
+            mock_filter.assert_not_called()
+
+            # When pre-fetched set does NOT include slug, returns False without querying DB
+            assert is_system_page_configured('terms', gs=mock_settings, db_pages_with_content={'privacy'}) is False
+            mock_filter.assert_not_called()

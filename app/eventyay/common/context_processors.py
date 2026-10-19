@@ -3,6 +3,8 @@ import warnings
 from pathlib import Path
 
 from django.conf import settings
+from django.core.exceptions import ObjectDoesNotExist
+from django.db import DatabaseError
 from django.http import Http404, HttpRequest
 from django.urls import resolve
 from django.utils import translation
@@ -11,7 +13,9 @@ from django_scopes import get_scope
 
 from eventyay.base.meetup import has_video_stream, is_meetup_event
 from eventyay.base.models.page import (
+    Page,
     is_builtin_page_url,
+    is_content_empty,
     is_external_url,
     is_system_page_configured,
 )
@@ -29,6 +33,7 @@ logger = logging.getLogger(__name__)
 
 
 def add_events(request: HttpRequest):
+    """Add event URL metadata to the context for organizer and plugin pages."""
     if (
         request.resolver_match
         and set(request.resolver_match.namespaces) & {'orga', 'plugins'}
@@ -46,6 +51,7 @@ def add_events(request: HttpRequest):
 
 
 def locale_context(request):
+    """Provide locale, calendar, and text formatting configuration to templates."""
     cal_static_dir = Path(__file__).parent.parent.joinpath('static', 'vendored', 'fullcalendar', 'locales')
     AVAILABLE_CALENDAR_LOCALES = tuple(
         f.name.removesuffix('.global.min.js') for f in cal_static_dir.rglob('*.global.min.js')
@@ -74,10 +80,12 @@ def locale_context(request):
 
 
 def messages(request):
+    """Expose the shared phrase catalog to templates."""
     return {'phrases': phrases}
 
 
 def system_information(request):
+    """Provide platform metadata, header/footer navigation links, and core footer items."""
     context = {
         'INSTANCE_NAME': settings.INSTANCE_NAME,
     }
@@ -102,8 +110,8 @@ def system_information(request):
             if is_meetup:
                 context['show_online_video_link'] = has_video_stream(event)
             else:
-                context['show_online_video_link'] = (
-                    bool(event.settings.venueless_url) and event.settings.get('venueless_show_public_link', False)
+                context['show_online_video_link'] = bool(event.settings.venueless_url) and event.settings.get(
+                    'venueless_show_public_link', False
                 )
         for __, response in footer_link.send(event, request=request):
             if isinstance(response, list):
@@ -134,19 +142,29 @@ def system_information(request):
 
     core_footer_links = []
     content_page_keys = {'terms', 'privacy', 'pricing', 'support'}
+
+    db_pages_with_content = set()
+    try:
+        pages = Page.objects.filter(slug__in=content_page_keys)
+        db_pages_with_content = {p.slug for p in pages if not is_content_empty(p.text)}
+    except (DatabaseError, ObjectDoesNotExist, RuntimeError):
+        pass
+
     for key, label, default_url in core_footer_items:
         enabled = gs.get(f'footer_link_{key}_enabled', as_type=bool, default=True)
         url = gs.get(f'footer_link_{key}_url', as_type=str, default=default_url).strip()
         if enabled and url:
             if key in content_page_keys and is_builtin_page_url(url, key, request=request):
-                if not is_system_page_configured(key, gs):
+                if not is_system_page_configured(key, gs, db_pages_with_content=db_pages_with_content):
                     continue
-            core_footer_links.append({
-                'key': key,
-                'label': label,
-                'url': url,
-                'target_blank': is_external_url(url, request=request),
-            })
+            core_footer_links.append(
+                {
+                    'key': key,
+                    'label': label,
+                    'url': url,
+                    'target_blank': is_external_url(url, request=request),
+                }
+            )
 
     context['core_footer_links'] = core_footer_links
 

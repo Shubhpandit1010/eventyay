@@ -1,9 +1,11 @@
+import html
 import json
+import re
 from typing import Any
 from urllib.parse import urlsplit
 
 from django.conf import settings
-from django.core.exceptions import ObjectDoesNotExist
+from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.db import DatabaseError, models
 from django.utils.translation import gettext_lazy as _
 from i18nfield.fields import I18nCharField, I18nTextField
@@ -16,8 +18,21 @@ from eventyay.base.settings import GlobalSettingsObject
 SYSTEM_PAGE_SLUGS = {'terms', 'privacy', 'pricing', 'support'}
 
 
+def validate_footer_url(value: str) -> None:
+    """Validate a footer URL or path, rejecting malformed values.
+
+    Raises ValidationError if the URL is malformed (e.g. invalid IPv6 host).
+    """
+    if not value or not str(value).strip():
+        return
+    try:
+        urlsplit(str(value).strip())
+    except ValueError as e:
+        raise ValidationError(_('Please enter a valid URL or path.')) from e
+
+
 def is_content_empty(content: Any) -> bool:
-    """Return True if content is None, blank, or contains only empty translations."""
+    """Return True if content is None, blank, or contains only empty translations or markup."""
     if not content:
         return True
     if isinstance(content, LazyI18nString):
@@ -30,20 +45,46 @@ def is_content_empty(content: Any) -> bool:
     else:
         data = content
 
+    def _has_visible_text(val: Any) -> bool:
+        if val is None:
+            return False
+        s = str(val)
+        if '<' in s and '>' in s:
+            s = re.sub(r'<[^>]+>', '', s)
+            s = html.unescape(s).replace('\xa0', ' ')
+        return bool(s.strip())
+
     if isinstance(data, dict):
-        return not any(str(v).strip() for v in data.values() if v is not None)
-    if isinstance(data, str):
-        return not data.strip()
-    return not str(data).strip()
+        return not any(_has_visible_text(v) for v in data.values())
+    return not _has_visible_text(data)
 
 
-def is_system_page_configured(slug: str, gs=None) -> bool:
-    """Check whether a system page (e.g. terms, privacy, pricing, support) has content configured."""
+def is_system_page_configured(
+    slug: str,
+    gs=None,
+    db_pages_with_content: set[str] | dict[str, Any] | None = None,
+) -> bool:
+    """Check whether a system page (e.g. terms, privacy, pricing, support) has content configured.
+
+    :param slug: The system page slug.
+    :param gs: Optional SettingsSandbox instance.
+    :param db_pages_with_content: Optional pre-fetched set or dict of slugs that have non-empty
+        content in the database. When provided, avoids database queries.
+    :return: True if the page has non-empty text in settings or the database.
+    """
     if gs is None:
         gs = GlobalSettingsObject().settings
     custom_text = gs.get(f'footer_page_{slug}_text', as_type=LazyI18nString)
     if not is_content_empty(custom_text):
         return True
+
+    if db_pages_with_content is not None:
+        if isinstance(db_pages_with_content, (set, frozenset, list, tuple)):
+            return slug in db_pages_with_content
+        if isinstance(db_pages_with_content, dict):
+            page = db_pages_with_content.get(slug)
+            return page is not None and not is_content_empty(page.text)
+
     try:
         page = Page.objects.filter(slug=slug).first()
         if page and not is_content_empty(page.text):
@@ -60,7 +101,11 @@ def is_builtin_page_url(url: str, key: str | None = None, request=None) -> bool:
     if not url:
         return False
 
-    parsed = urlsplit(url.strip())
+    try:
+        parsed = urlsplit(url.strip())
+    except ValueError:
+        return False
+
     # Any URL with a non-HTTP(S) scheme (e.g. mailto:, tel:) is external
     if parsed.scheme and parsed.scheme.lower() not in ('http', 'https'):
         return False
@@ -70,14 +115,16 @@ def is_builtin_page_url(url: str, key: str | None = None, request=None) -> bool:
         site_url = getattr(settings, 'SITE_URL', '')
         site_netloc = getattr(settings, 'SITE_NETLOC', '')
         if not site_netloc and site_url:
-            site_netloc = urlsplit(site_url).netloc
+            try:
+                site_netloc = urlsplit(site_url).netloc
+            except ValueError:
+                site_netloc = ''
         if site_netloc:
             allowed_netlocs.add(site_netloc.lower())
         if request and hasattr(request, 'get_host'):
-            try:
-                allowed_netlocs.add(request.get_host().lower())
-            except Exception:
-                pass
+            host = request.get_host()
+            if host:
+                allowed_netlocs.add(host.lower())
         if parsed.netloc.lower() not in allowed_netlocs:
             return False
 
@@ -93,7 +140,11 @@ def is_external_url(url: str, request=None) -> bool:
     if not url:
         return False
 
-    parsed = urlsplit(url.strip())
+    try:
+        parsed = urlsplit(url.strip())
+    except ValueError:
+        return False
+
     if parsed.scheme and parsed.scheme.lower() not in ('http', 'https'):
         return True
 
@@ -102,17 +153,44 @@ def is_external_url(url: str, request=None) -> bool:
         site_url = getattr(settings, 'SITE_URL', '')
         site_netloc = getattr(settings, 'SITE_NETLOC', '')
         if not site_netloc and site_url:
-            site_netloc = urlsplit(site_url).netloc
+            try:
+                site_netloc = urlsplit(site_url).netloc
+            except ValueError:
+                site_netloc = ''
         if site_netloc:
             allowed_netlocs.add(site_netloc.lower())
         if request and hasattr(request, 'get_host'):
-            try:
-                allowed_netlocs.add(request.get_host().lower())
-            except Exception:
-                pass
+            host = request.get_host()
+            if host:
+                allowed_netlocs.add(host.lower())
         return parsed.netloc.lower() not in allowed_netlocs
 
     return False
+
+
+def get_visible_system_pages(link_field: str, gs=None):
+    """Return Page queryset for system navigation menus, excluding disabled system pages.
+
+    Pages that are not system pages (slug not in SYSTEM_PAGE_SLUGS) and system pages
+    whose enabled setting is True are kept.
+
+    :param link_field: Name of the boolean field on Page ('link_in_header' or 'link_in_footer').
+    :param gs: Optional SettingsSandbox instance.
+    :return: Filtered Page queryset.
+    """
+    filter_kwargs = {'link_in_system': True, link_field: True}
+    pages = Page.objects.filter(**filter_kwargs)
+    try:
+        if gs is None:
+            gs = GlobalSettingsObject().settings
+        disabled_slugs = [
+            slug for slug in SYSTEM_PAGE_SLUGS if not gs.get(f'footer_link_{slug}_enabled', as_type=bool, default=True)
+        ]
+        if disabled_slugs:
+            return pages.exclude(slug__in=disabled_slugs)
+    except (DatabaseError, RuntimeError):
+        pass
+    return pages
 
 
 class Page(LoggedModel):
@@ -145,5 +223,5 @@ class Page(LoggedModel):
 
     @property
     def has_content(self) -> bool:
+        """Return True if the page has non-empty text content."""
         return not is_content_empty(self.text)
-
