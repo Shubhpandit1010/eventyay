@@ -5,7 +5,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from django.conf import settings
-from django.core.exceptions import ObjectDoesNotExist, ValidationError
+from django.core.exceptions import DisallowedHost, ObjectDoesNotExist, ValidationError
 from django.db import DatabaseError, models
 from django.utils.translation import gettext_lazy as _
 from i18nfield.fields import I18nCharField, I18nTextField
@@ -45,6 +45,9 @@ def is_content_empty(content: Any) -> bool:
     else:
         data = content
 
+    if data is None or data == '' or (isinstance(data, (list, tuple, set, dict)) and not data):
+        return True
+
     def _has_visible_text(val: Any) -> bool:
         if val is None:
             return False
@@ -56,6 +59,8 @@ def is_content_empty(content: Any) -> bool:
 
     if isinstance(data, dict):
         return not any(_has_visible_text(v) for v in data.values())
+    if isinstance(data, (list, tuple, set)):
+        return not any(_has_visible_text(v) for v in data)
     return not _has_visible_text(data)
 
 
@@ -94,6 +99,32 @@ def is_system_page_configured(
     return False
 
 
+def _get_allowed_netlocs(request=None) -> set[str]:
+    """Resolve allowed network locations and hostnames for the current installation."""
+    allowed = set()
+    site_url = getattr(settings, 'SITE_URL', '')
+    site_netloc = getattr(settings, 'SITE_NETLOC', '')
+    if not site_netloc and site_url:
+        try:
+            site_netloc = urlsplit(site_url).netloc
+        except ValueError:
+            site_netloc = ''
+    if site_netloc:
+        allowed.add(site_netloc.lower())
+        if ':' in site_netloc:
+            allowed.add(site_netloc.split(':')[0].lower())
+    if request and hasattr(request, 'get_host'):
+        try:
+            host = request.get_host()
+            if host:
+                allowed.add(host.lower())
+                if ':' in host:
+                    allowed.add(host.split(':')[0].lower())
+        except DisallowedHost:
+            pass
+    return allowed
+
+
 def is_builtin_page_url(url: str, key: str | None = None, request=None) -> bool:
     """Determine whether a URL targets the built-in system page (e.g. /terms or /page/terms)
     rather than an external or custom destination.
@@ -111,21 +142,10 @@ def is_builtin_page_url(url: str, key: str | None = None, request=None) -> bool:
         return False
 
     if parsed.netloc:
-        allowed_netlocs = set()
-        site_url = getattr(settings, 'SITE_URL', '')
-        site_netloc = getattr(settings, 'SITE_NETLOC', '')
-        if not site_netloc and site_url:
-            try:
-                site_netloc = urlsplit(site_url).netloc
-            except ValueError:
-                site_netloc = ''
-        if site_netloc:
-            allowed_netlocs.add(site_netloc.lower())
-        if request and hasattr(request, 'get_host'):
-            host = request.get_host()
-            if host:
-                allowed_netlocs.add(host.lower())
-        if parsed.netloc.lower() not in allowed_netlocs:
+        allowed = _get_allowed_netlocs(request)
+        netloc = parsed.netloc.lower()
+        hostname = (parsed.hostname or '').lower()
+        if netloc not in allowed and hostname not in allowed:
             return False
 
     path = parsed.path.strip('/')
@@ -149,21 +169,10 @@ def is_external_url(url: str, request=None) -> bool:
         return True
 
     if parsed.netloc:
-        allowed_netlocs = set()
-        site_url = getattr(settings, 'SITE_URL', '')
-        site_netloc = getattr(settings, 'SITE_NETLOC', '')
-        if not site_netloc and site_url:
-            try:
-                site_netloc = urlsplit(site_url).netloc
-            except ValueError:
-                site_netloc = ''
-        if site_netloc:
-            allowed_netlocs.add(site_netloc.lower())
-        if request and hasattr(request, 'get_host'):
-            host = request.get_host()
-            if host:
-                allowed_netlocs.add(host.lower())
-        return parsed.netloc.lower() not in allowed_netlocs
+        allowed = _get_allowed_netlocs(request)
+        netloc = parsed.netloc.lower()
+        hostname = (parsed.hostname or '').lower()
+        return netloc not in allowed and hostname not in allowed
 
     return False
 

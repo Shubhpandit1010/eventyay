@@ -239,7 +239,6 @@ class StartPageContentForm(PageContentSettingsForm):
                 'Ticketing, Call for Speakers, Scheduling, Check-in, and more.'
             )
         ),
-
     )
 
     startpage_show_features = forms.BooleanField(
@@ -461,11 +460,13 @@ class DefaultPageContentForm(PageContentSettingsForm):
             if self.has_content
             else _('When disabled, this link is hidden from the footer.')
         )
+        label = _('Active / Enable page') if self.has_content else _('Show in footer')
         self.fields[enabled_key] = forms.BooleanField(
             required=False,
-            label=_('Active / Enable page'),
+            label=label,
             help_text=help_text,
         )
+
         self.initial[enabled_key] = gs.get(enabled_key, as_type=bool, default=True)
 
         self.fields[url_key] = forms.CharField(

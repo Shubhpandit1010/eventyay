@@ -10,6 +10,7 @@ from django.urls import resolve
 from django.utils import translation
 from django.utils.translation import gettext_lazy as _
 from django_scopes import get_scope
+from i18nfield.strings import LazyI18nString
 
 from eventyay.base.meetup import has_video_stream, is_meetup_event
 from eventyay.base.models.page import (
@@ -17,7 +18,6 @@ from eventyay.base.models.page import (
     is_builtin_page_url,
     is_content_empty,
     is_external_url,
-    is_system_page_configured,
 )
 from eventyay.base.models.settings import GlobalSettings
 from eventyay.base.settings import GlobalSettingsObject
@@ -143,19 +143,38 @@ def system_information(request):
     core_footer_links = []
     content_page_keys = {'terms', 'privacy', 'pricing', 'support'}
 
-    db_pages_with_content = set()
-    try:
-        pages = Page.objects.filter(slug__in=content_page_keys)
-        db_pages_with_content = {p.slug for p in pages if not is_content_empty(p.text)}
-    except (DatabaseError, ObjectDoesNotExist, RuntimeError):
-        pass
+    # Batch check system page content: inspect global settings first,
+    # then batch query only missing slugs, caching on request if available.
+    configured_pages = getattr(request, '_system_pages_configured', None)
+    if configured_pages is None:
+        configured_pages = set()
+        missing_slugs = set()
+        for key in content_page_keys:
+            custom_text = gs.get(f'footer_page_{key}_text', as_type=LazyI18nString)
+            if not is_content_empty(custom_text):
+                configured_pages.add(key)
+            else:
+                missing_slugs.add(key)
+
+        if missing_slugs:
+            try:
+                pages = Page.objects.filter(slug__in=missing_slugs)
+                configured_pages.update(p.slug for p in pages if not is_content_empty(p.text))
+            except (DatabaseError, ObjectDoesNotExist, RuntimeError):
+                pass
+
+        if request is not None:
+            try:
+                request._system_pages_configured = configured_pages
+            except AttributeError:
+                pass
 
     for key, label, default_url in core_footer_items:
         enabled = gs.get(f'footer_link_{key}_enabled', as_type=bool, default=True)
         url = gs.get(f'footer_link_{key}_url', as_type=str, default=default_url).strip()
         if enabled and url:
             if key in content_page_keys and is_builtin_page_url(url, key, request=request):
-                if not is_system_page_configured(key, gs, db_pages_with_content=db_pages_with_content):
+                if key not in configured_pages:
                     continue
             core_footer_links.append(
                 {

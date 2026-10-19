@@ -11,7 +11,6 @@ from django.http import Http404
 from django.template.loader import render_to_string
 
 from eventyay.base.models.page import (
-    Page,
     get_visible_system_pages,
     is_builtin_page_url,
     is_content_empty,
@@ -322,10 +321,12 @@ def test_system_page_view_slug_handling():
     view_kwargs.kwargs = {'slug': 'privacy'}
     assert view_kwargs.get_slug() == 'privacy'
 
-    with patch('eventyay.control.views.pages.Page.objects.get') as mock_get:
+    with patch('eventyay.control.views.pages.Page.objects.filter') as mock_filter:
         mock_page_terms = MagicMock(title='Terms of Service', slug='terms', text='Terms text')
         mock_page_privacy = MagicMock(title='Privacy Policy', slug='privacy', text='Privacy text')
-        mock_get.side_effect = lambda slug: mock_page_privacy if slug == 'privacy' else mock_page_terms
+        mock_filter.side_effect = lambda slug: MagicMock(
+            first=lambda: mock_page_privacy if slug == 'privacy' else mock_page_terms
+        )
         with patch('eventyay.control.views.pages.GlobalSettingsObject') as mock_gso:
             mock_settings = _make_mock_settings(
                 {
@@ -344,7 +345,8 @@ def test_system_page_view_custom_content():
     view = SystemPageView()
     view.slug = 'privacy'
 
-    with patch('eventyay.control.views.pages.Page.objects.get', side_effect=Page.DoesNotExist):
+    with patch('eventyay.control.views.pages.Page.objects.filter') as mock_filter:
+        mock_filter.return_value.first.return_value = None
         with patch('eventyay.control.views.pages.GlobalSettingsObject') as mock_gso:
             mock_settings = _make_mock_settings(
                 {
@@ -358,12 +360,33 @@ def test_system_page_view_custom_content():
             assert str(page.text) == '# Custom Privacy Content'
 
 
+def test_system_page_view_settings_precedence_over_db_page():
+    """Verify global settings content takes precedence over database page content for system pages."""
+    view = SystemPageView()
+    view.slug = 'terms'
+
+    with patch('eventyay.control.views.pages.Page.objects.filter') as mock_filter:
+        mock_filter.return_value.first.return_value = MagicMock(title='DB Terms', slug='terms', text='DB terms text')
+        with patch('eventyay.control.views.pages.GlobalSettingsObject') as mock_gso:
+            mock_settings = _make_mock_settings(
+                {
+                    'footer_link_terms_enabled': True,
+                    'footer_page_terms_text': '# Settings terms text',
+                }
+            )
+            mock_gso.return_value.settings = mock_settings
+            page = view.get_page()
+            assert page.title == 'Terms of Service'
+            assert str(page.text) == '# Settings terms text'
+
+
 def test_system_page_view_unconfigured_returns_404():
     """Verify SystemPageView raises Http404 when content is unconfigured."""
     view = SystemPageView()
     view.slug = 'terms'
 
-    with patch('eventyay.control.views.pages.Page.objects.get', side_effect=Page.DoesNotExist):
+    with patch('eventyay.control.views.pages.Page.objects.filter') as mock_filter:
+        mock_filter.return_value.first.return_value = None
         with patch('eventyay.control.views.pages.GlobalSettingsObject') as mock_gso:
             mock_settings = _make_mock_settings(
                 {
@@ -397,8 +420,8 @@ def test_system_page_view_empty_db_page_returns_404():
     view = SystemPageView()
     view.slug = 'terms'
 
-    with patch('eventyay.control.views.pages.Page.objects.get') as mock_get:
-        mock_get.return_value = MagicMock(title='Terms', slug='terms', text='')
+    with patch('eventyay.control.views.pages.Page.objects.filter') as mock_filter:
+        mock_filter.return_value.first.return_value = MagicMock(title='Terms', slug='terms', text='')
         with patch('eventyay.control.views.pages.GlobalSettingsObject') as mock_gso:
             mock_settings = _make_mock_settings(
                 {
@@ -415,8 +438,8 @@ def test_system_page_view_blank_db_page_serves_settings_text():
     view = SystemPageView()
     view.slug = 'terms'
 
-    with patch('eventyay.control.views.pages.Page.objects.get') as mock_get:
-        mock_get.return_value = MagicMock(title='Terms', slug='terms', text='')
+    with patch('eventyay.control.views.pages.Page.objects.filter') as mock_filter:
+        mock_filter.return_value.first.return_value = MagicMock(title='Terms', slug='terms', text='')
         with patch('eventyay.control.views.pages.GlobalSettingsObject') as mock_gso:
             mock_settings = _make_mock_settings(
                 {
@@ -452,7 +475,8 @@ def test_show_page_view_serves_custom_page():
     view.kwargs = {'slug': 'about-us'}
 
     mock_custom_page = MagicMock(title='About Us', slug='about-us', text='About us content')
-    with patch('eventyay.control.views.pages.Page.objects.get', return_value=mock_custom_page):
+    with patch('eventyay.control.views.pages.Page.objects.filter') as mock_filter:
+        mock_filter.return_value.first.return_value = mock_custom_page
         page = view.get_page()
         assert page == mock_custom_page
 
@@ -487,6 +511,12 @@ def test_is_content_empty_helper():
     assert is_content_empty(None) is True
     assert is_content_empty('') is True
     assert is_content_empty('   ') is True
+    assert is_content_empty('null') is True
+    assert is_content_empty('[]') is True
+    assert is_content_empty('{}') is True
+    assert is_content_empty([]) is True
+    assert is_content_empty({}) is True
+    assert is_content_empty(['<p></p>']) is True
     assert is_content_empty(LazyI18nString('')) is True
     assert is_content_empty(LazyI18nString({'en': '', 'de': '   '})) is True
     assert is_content_empty('{"en": ""}') is True
@@ -496,14 +526,22 @@ def test_is_content_empty_helper():
 
 
 def test_default_page_content_form_field_attributes():
-    """Verify DefaultPageContentForm builds enabled toggle with active/enable label and help text."""
+    """Verify DefaultPageContentForm builds enabled toggle with conditional label and help text."""
     mock_obj = MagicMock()
     mock_obj.settings = _make_mock_settings()
+    # Content page (terms)
     form = DefaultPageContentForm(obj=mock_obj, slug='terms')
     assert 'footer_link_terms_enabled' in form.fields
     field = form.fields['footer_link_terms_enabled']
     assert str(field.label) == 'Active / Enable page'
     assert '404' in str(field.help_text)
+
+    # Link-only page without content (documentation)
+    link_form = DefaultPageContentForm(obj=mock_obj, slug='documentation')
+    assert 'footer_link_documentation_enabled' in link_form.fields
+    link_field = link_form.fields['footer_link_documentation_enabled']
+    assert str(link_field.label) == 'Show in footer'
+    assert '404' not in str(link_field.help_text)
 
 
 def test_core_footer_template_structure():
@@ -763,3 +801,50 @@ def test_is_system_page_configured_with_prefetched_db_pages():
             # When pre-fetched set does NOT include slug, returns False without querying DB
             assert is_system_page_configured('terms', gs=mock_settings, db_pages_with_content={'privacy'}) is False
             mock_filter.assert_not_called()
+
+
+def test_context_processor_skips_db_query_when_settings_text_present(rf):
+    """Verify system_information does not query Page model when all system pages have settings text."""
+    request = rf.get('/')
+    with patch('eventyay.common.context_processors.GlobalSettingsObject') as mock_gso:
+        mock_settings = _make_mock_settings(
+            {
+                'footer_link_terms_enabled': True,
+                'footer_page_terms_text': 'Terms configured',
+                'footer_link_privacy_enabled': True,
+                'footer_page_privacy_text': 'Privacy configured',
+                'footer_link_pricing_enabled': True,
+                'footer_page_pricing_text': 'Pricing configured',
+                'footer_link_support_enabled': True,
+                'footer_page_support_text': 'Support configured',
+            }
+        )
+        mock_gso.return_value.settings = mock_settings
+        with patch('eventyay.common.context_processors.Page.objects.filter') as mock_filter:
+            ctx = system_information(request)
+            mock_filter.assert_not_called()
+            keys = [link['key'] for link in ctx['core_footer_links']]
+            assert 'terms' in keys
+            assert 'privacy' in keys
+            assert 'pricing' in keys
+            assert 'support' in keys
+
+
+def test_allowed_netlocs_and_hostname_comparison(rf):
+    """Verify _get_allowed_netlocs resolves netlocs and hostnames and url helpers compare both."""
+    from eventyay.base.models.page import _get_allowed_netlocs
+
+    request = rf.get('/', HTTP_HOST='eventyay.org:8000')
+    with patch('django.conf.settings.ALLOWED_HOSTS', ['*']):
+        with patch('django.conf.settings.SITE_URL', 'https://eventyay.com:443'):
+            with patch('django.conf.settings.SITE_NETLOC', 'eventyay.com:443'):
+                allowed = _get_allowed_netlocs(request)
+                assert 'eventyay.com:443' in allowed
+                assert 'eventyay.com' in allowed
+                assert 'eventyay.org:8000' in allowed
+                assert 'eventyay.org' in allowed
+
+                # Verify is_builtin_page_url and is_external_url match hostname even with port
+                assert is_builtin_page_url('https://eventyay.org:8000/terms', 'terms', request=request) is True
+                assert is_external_url('https://eventyay.org:8000/terms', request=request) is False
+                assert is_external_url('https://othersite.com/terms', request=request) is True
