@@ -5,8 +5,6 @@ import nh3
 from django import forms
 from django.conf import settings
 from django.contrib import messages
-from django.core.exceptions import ObjectDoesNotExist
-from django.db import DatabaseError
 from django.http import Http404, HttpResponseRedirect, JsonResponse
 from django.shortcuts import redirect
 from django.urls import reverse
@@ -453,21 +451,15 @@ class ShowPageView(TemplateView):
                     text=custom_text,
                 )
 
-            try:
-                page = Page.objects.filter(slug=slug).first()
-                if page and not is_content_empty(page.text):
-                    return page
-            except (DatabaseError, ObjectDoesNotExist, RuntimeError):
-                pass
+            page = Page.objects.filter(slug=slug).first()
+            if page and not is_content_empty(page.text):
+                return page
 
             raise Http404(_('The requested page does not exist.'))
 
-        try:
-            page = Page.objects.filter(slug=slug).first()
-            if page:
-                return page
-        except (DatabaseError, ObjectDoesNotExist, RuntimeError):
-            pass
+        page = Page.objects.filter(slug=slug).first()
+        if page:
+            return page
         raise Http404(_('The requested page does not exist.'))
 
     def get_context_data(self, **kwargs):
