@@ -382,7 +382,10 @@ class DefaultPageContentForm(PageContentSettingsForm):
 
         self.fields[enabled_key] = forms.BooleanField(
             required=False,
-            label=_('Show in footer'),
+            label=_('Active / Enable page'),
+            help_text=_(
+                'When disabled or unconfigured, this page returns a 404 Not Found error and is hidden from the footer.'
+            ),
         )
         self.initial[enabled_key] = gs.get(enabled_key, as_type=bool, default=True)
 

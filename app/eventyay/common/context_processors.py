@@ -10,6 +10,7 @@ from django.utils.translation import gettext_lazy as _
 from django_scopes import get_scope
 
 from eventyay.base.meetup import has_video_stream, is_meetup_event
+from eventyay.base.models.page import is_system_page_configured
 from eventyay.base.models.settings import GlobalSettings
 from eventyay.base.settings import GlobalSettingsObject
 from eventyay.cfp.signals import footer_link, html_head
@@ -127,10 +128,14 @@ def system_information(request):
     ]
 
     core_footer_links = []
+    content_page_keys = {'terms', 'privacy', 'pricing', 'support'}
     for key, label, default_url in core_footer_items:
         enabled = gs.get(f'footer_link_{key}_enabled', as_type=bool, default=True)
         url = gs.get(f'footer_link_{key}_url', as_type=str, default=default_url).strip()
         if enabled and url:
+            if key in content_page_keys and not (url.startswith('http://') or url.startswith('https://')):
+                if not is_system_page_configured(key, gs):
+                    continue
             core_footer_links.append({
                 'key': key,
                 'label': label,

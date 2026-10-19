@@ -1,8 +1,51 @@
-from django.db import models
+import json
+from typing import Any
+
+from django.core.exceptions import ObjectDoesNotExist
+from django.db import DatabaseError, models
 from django.utils.translation import gettext_lazy as _
 from i18nfield.fields import I18nCharField, I18nTextField
+from i18nfield.strings import LazyI18nString
 
 from eventyay.base.models import LoggedModel
+from eventyay.base.settings import GlobalSettingsObject
+
+
+def is_content_empty(content: Any) -> bool:
+    """Return True if content is None, blank, or contains only empty translations."""
+    if not content:
+        return True
+    if isinstance(content, LazyI18nString):
+        data = content.data
+    elif isinstance(content, str):
+        try:
+            data = json.loads(content)
+        except (json.JSONDecodeError, TypeError):
+            data = content
+    else:
+        data = content
+
+    if isinstance(data, dict):
+        return not any(str(v).strip() for v in data.values() if v is not None)
+    if isinstance(data, str):
+        return not data.strip()
+    return not str(data).strip()
+
+
+def is_system_page_configured(slug: str, gs=None) -> bool:
+    """Check whether a system page (e.g. terms, privacy, pricing, support) has content configured."""
+    if gs is None:
+        gs = GlobalSettingsObject().settings
+    custom_text = gs.get(f'footer_page_{slug}_text', as_type=LazyI18nString)
+    if not is_content_empty(custom_text):
+        return True
+    try:
+        page = Page.objects.filter(slug=slug).first()
+        if page and not is_content_empty(page.text):
+            return True
+    except (DatabaseError, ObjectDoesNotExist):
+        pass
+    return False
 
 
 class Page(LoggedModel):
@@ -32,3 +75,8 @@ class Page(LoggedModel):
         ),
     )
     text = I18nTextField(verbose_name=_('Page content'))
+
+    @property
+    def has_content(self) -> bool:
+        return not is_content_empty(self.text)
+

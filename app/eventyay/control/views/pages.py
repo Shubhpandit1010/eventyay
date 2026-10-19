@@ -14,9 +14,8 @@ from django.views.generic import FormView, ListView, TemplateView, UpdateView
 
 from i18nfield.strings import LazyI18nString
 
-from eventyay.base.models.page import Page
+from eventyay.base.models.page import Page, is_content_empty
 from eventyay.base.settings import GlobalSettingsObject
-from eventyay.base.templatetags.rich_text import compile_markdown
 from eventyay.common.permissions import is_admin_mode_active
 from eventyay.control.forms.page import PageSettingsForm
 from eventyay.control.forms.pages_admin import (
@@ -418,12 +417,19 @@ class SystemPageView(ShowPageView):
 
     def get_page(self):
         slug = self.get_slug()
+        gs = GlobalSettingsObject().settings
+        enabled_key = f'footer_link_{slug}_enabled'
+        if not gs.get(enabled_key, as_type=bool, default=True):
+            raise Http404(_('The requested page does not exist.'))
+
         try:
-            return Page.objects.get(slug=slug)
+            page = Page.objects.get(slug=slug)
+            if is_content_empty(page.text):
+                raise Http404(_('The requested page does not exist.'))
+            return page
         except Page.DoesNotExist:
-            gs = GlobalSettingsObject().settings
-            enabled_key = f'footer_link_{slug}_enabled'
-            if gs.get(enabled_key, as_type=bool, default=True):
+            custom_text = gs.get(f'footer_page_{slug}_text', as_type=LazyI18nString)
+            if not is_content_empty(custom_text):
                 title_map = {
                     'terms': _('Terms of Service'),
                     'privacy': _('Privacy Policy'),
@@ -431,18 +437,10 @@ class SystemPageView(ShowPageView):
                     'support': _('Support & Help'),
                 }
                 title = title_map.get(slug, slug.capitalize())
-                custom_text = gs.get(f'footer_page_{slug}_text', as_type=LazyI18nString)
-                if custom_text:
-                    text = custom_text
-                else:
-                    # Default copy is Markdown; convert so ShowPageView can render HTML.
-                    text = compile_markdown(
-                        str(_('Content for this page has not been configured yet.'))
-                    )
                 return Page(
                     title=title,
                     slug=slug,
-                    text=text,
+                    text=custom_text,
                 )
             raise Http404(_('The requested page does not exist.'))
 
