@@ -19,6 +19,7 @@ from eventyay.base.forms import SettingsForm
 from eventyay.base.settings import GlobalSettingsObject
 from eventyay.common.forms.fields import I18nRichTextFormField
 
+
 DEFAULT_PAGE_LOCALE = 'en'
 
 # Slugs that expose editable rich-text page content in addition to a footer link.
@@ -83,7 +84,7 @@ class PageContentSettingsForm(SettingsForm):
     page_content_fields = ()
 
     def __init__(self, *args, **kwargs):
-        self.obj = GlobalSettingsObject()
+        self.obj = kwargs.pop('obj', None) or GlobalSettingsObject()
         self._apply_setting_defaults()
         self._page_locales = self._resolve_page_locales(args, kwargs)
         super().__init__(*args, obj=self.obj, **kwargs)
@@ -380,12 +381,18 @@ class DefaultPageContentForm(PageContentSettingsForm):
         url_key = f'footer_link_{slug}_url'
         gs = self.obj.settings
 
+        help_text = (
+            _(
+                'When disabled, or when pointing to a built-in page with no configured content, '
+                'this link is hidden from the footer and the page returns a 404 Not Found error.'
+            )
+            if self.has_content
+            else _('When disabled, this link is hidden from the footer.')
+        )
         self.fields[enabled_key] = forms.BooleanField(
             required=False,
             label=_('Active / Enable page'),
-            help_text=_(
-                'When disabled or unconfigured, this page returns a 404 Not Found error and is hidden from the footer.'
-            ),
+            help_text=help_text,
         )
         self.initial[enabled_key] = gs.get(enabled_key, as_type=bool, default=True)
 

@@ -9,15 +9,19 @@ from django.contrib.auth.models import AnonymousUser
 from django.http import Http404
 from django.template.loader import render_to_string
 
-from eventyay.base.forms import I18nMarkdownTextarea
-from eventyay.base.models.page import Page, is_content_empty
+from eventyay.base.models.page import (
+    Page,
+    is_builtin_page_url,
+    is_content_empty,
+    is_external_url,
+)
 from eventyay.common.context_processors import system_information
 from eventyay.common.forms.fields import I18nRichTextFormField
 from eventyay.common.forms.widgets import I18nRichTextWidget
 from eventyay.control.forms import MultipleLanguagesWidget
 from eventyay.control.forms.global_settings import GlobalSettingsForm
 from eventyay.control.forms.pages_admin import DefaultPageContentForm
-from eventyay.control.views.pages import SystemPageView
+from eventyay.control.views.pages import ShowPageView, SystemPageView
 
 
 def _make_mock_settings(stored=None):
@@ -246,6 +250,45 @@ def test_context_processor_excludes_unconfigured_footer_links(rf):
             assert 'documentation' in keys
 
 
+def test_context_processor_handles_external_and_same_site_footer_urls(rf):
+    # Verify external destinations remain visible without local content, while same-site absolute URLs are checked
+    request = rf.get('/')
+    with patch('django.conf.settings.SITE_URL', 'https://eventyay.com'):
+        with patch('django.conf.settings.SITE_NETLOC', 'eventyay.com'):
+            with patch('eventyay.common.context_processors.GlobalSettingsObject') as mock_gso:
+                mock_settings = _make_mock_settings({
+                    'footer_link_events_enabled': True,
+                    # Terms points to an external site, local content is unconfigured
+                    'footer_link_terms_enabled': True,
+                    'footer_link_terms_url': 'HTTP://EXTERNAL-LEGAL.COM/terms',
+                    # Privacy points to a same-site absolute URL, local content is unconfigured
+                    'footer_link_privacy_enabled': True,
+                    'footer_link_privacy_url': 'https://eventyay.com/privacy',
+                    # Pricing points to a same-site absolute URL, local content IS configured
+                    'footer_link_pricing_enabled': True,
+                    'footer_link_pricing_url': 'https://eventyay.com/pricing',
+                    'footer_page_pricing_text': 'Pricing info',
+                })
+                mock_gso.return_value.settings = mock_settings
+                with patch('eventyay.base.models.page.Page.objects.filter') as mock_filter:
+                    mock_filter.return_value.first.return_value = None
+                    ctx = system_information(request)
+                    links_by_key = {link['key']: link for link in ctx['core_footer_links']}
+
+                    # External terms link is NOT hidden
+                    assert 'terms' in links_by_key
+                    assert links_by_key['terms']['url'] == 'HTTP://EXTERNAL-LEGAL.COM/terms'
+                    assert links_by_key['terms']['target_blank'] is True
+
+                    # Same-site unconfigured privacy link IS hidden
+                    assert 'privacy' not in links_by_key
+
+                    # Same-site configured pricing link is shown, not target_blank
+                    assert 'pricing' in links_by_key
+                    assert links_by_key['pricing']['target_blank'] is False
+
+
+
 def test_system_page_view_slug_handling():
     # Verify SystemPageView resolves slug from attribute and URL kwargs
     view = SystemPageView()
@@ -334,6 +377,73 @@ def test_system_page_view_empty_db_page_returns_404():
                 view.get_page()
 
 
+def test_system_page_view_blank_db_page_serves_settings_text():
+    # Verify SystemPageView treats blank DB page as absent and serves settings text
+    view = SystemPageView()
+    view.slug = 'terms'
+
+    with patch('eventyay.control.views.pages.Page.objects.get') as mock_get:
+        mock_get.return_value = MagicMock(title='Terms', slug='terms', text='')
+        with patch('eventyay.control.views.pages.GlobalSettingsObject') as mock_gso:
+            mock_settings = _make_mock_settings({
+                'footer_link_terms_enabled': True,
+                'footer_page_terms_text': '# Terms from settings',
+            })
+            mock_gso.return_value.settings = mock_settings
+            page = view.get_page()
+            assert page.title == 'Terms of Service'
+            assert str(page.text) == '# Terms from settings'
+
+
+def test_show_page_view_disabled_system_page_returns_404():
+    # Verify ShowPageView enforces enabled check for system-page slugs
+    view = ShowPageView()
+    view.kwargs = {'slug': 'terms'}
+
+    with patch('eventyay.control.views.pages.GlobalSettingsObject') as mock_gso:
+        mock_settings = _make_mock_settings({
+            'footer_link_terms_enabled': False,
+        })
+        mock_gso.return_value.settings = mock_settings
+        with pytest.raises(Http404):
+            view.get_page()
+
+
+def test_show_page_view_serves_custom_page():
+    # Verify ShowPageView serves non-system custom page normally
+    view = ShowPageView()
+    view.kwargs = {'slug': 'about-us'}
+
+    mock_custom_page = MagicMock(title='About Us', slug='about-us', text='About us content')
+    with patch('eventyay.control.views.pages.Page.objects.get', return_value=mock_custom_page):
+        page = view.get_page()
+        assert page == mock_custom_page
+
+
+def test_builtin_and_external_url_classification():
+    # Verify accurate classification without relying on lowercase prefix checks
+    with patch('django.conf.settings.SITE_URL', 'https://eventyay.com'):
+        with patch('django.conf.settings.SITE_NETLOC', 'eventyay.com'):
+            # Built-in relative paths
+            assert is_builtin_page_url('/terms', 'terms') is True
+            assert is_builtin_page_url('/page/terms/', 'terms') is True
+            assert is_external_url('/terms') is False
+
+            # Built-in same-site absolute URLs
+            assert is_builtin_page_url('https://eventyay.com/terms', 'terms') is True
+            assert is_builtin_page_url('https://eventyay.com/page/terms', 'terms') is True
+            assert is_external_url('https://eventyay.com/terms') is False
+
+            # External destinations
+            assert is_builtin_page_url('HTTP://EXTERNAL.COM/terms', 'terms') is False
+            assert is_external_url('HTTP://EXTERNAL.COM/terms') is True
+            assert is_builtin_page_url('//external.com/privacy', 'privacy') is False
+            assert is_external_url('//external.com/privacy') is True
+            assert is_builtin_page_url('mailto:support@eventyay.com', 'support') is False
+            assert is_external_url('mailto:support@eventyay.com') is True
+
+
+
 def test_is_content_empty_helper():
     # Verify is_content_empty detects empty values, blank translations, and valid content
     from i18nfield.strings import LazyI18nString
@@ -349,6 +459,7 @@ def test_is_content_empty_helper():
     assert is_content_empty('# Custom Content') is False
 
 
+@pytest.mark.django_db
 def test_default_page_content_form_field_attributes():
     # Verify DefaultPageContentForm builds enabled toggle with active/enable label and help text
     mock_obj = MagicMock()

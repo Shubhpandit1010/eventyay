@@ -1,6 +1,8 @@
 import json
 from typing import Any
+from urllib.parse import urlsplit
 
+from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import DatabaseError, models
 from django.utils.translation import gettext_lazy as _
@@ -9,6 +11,9 @@ from i18nfield.strings import LazyI18nString
 
 from eventyay.base.models import LoggedModel
 from eventyay.base.settings import GlobalSettingsObject
+
+
+SYSTEM_PAGE_SLUGS = {'terms', 'privacy', 'pricing', 'support'}
 
 
 def is_content_empty(content: Any) -> bool:
@@ -43,8 +48,70 @@ def is_system_page_configured(slug: str, gs=None) -> bool:
         page = Page.objects.filter(slug=slug).first()
         if page and not is_content_empty(page.text):
             return True
-    except (DatabaseError, ObjectDoesNotExist):
+    except (DatabaseError, ObjectDoesNotExist, RuntimeError):
         pass
+    return False
+
+
+def is_builtin_page_url(url: str, key: str | None = None, request=None) -> bool:
+    """Determine whether a URL targets the built-in system page (e.g. /terms or /page/terms)
+    rather than an external or custom destination.
+    """
+    if not url:
+        return False
+
+    parsed = urlsplit(url.strip())
+    # Any URL with a non-HTTP(S) scheme (e.g. mailto:, tel:) is external
+    if parsed.scheme and parsed.scheme.lower() not in ('http', 'https'):
+        return False
+
+    if parsed.netloc:
+        allowed_netlocs = set()
+        site_url = getattr(settings, 'SITE_URL', '')
+        site_netloc = getattr(settings, 'SITE_NETLOC', '')
+        if not site_netloc and site_url:
+            site_netloc = urlsplit(site_url).netloc
+        if site_netloc:
+            allowed_netlocs.add(site_netloc.lower())
+        if request and hasattr(request, 'get_host'):
+            try:
+                allowed_netlocs.add(request.get_host().lower())
+            except Exception:
+                pass
+        if parsed.netloc.lower() not in allowed_netlocs:
+            return False
+
+    path = parsed.path.strip('/')
+    if key:
+        return path in (key, f'page/{key}')
+
+    return path in SYSTEM_PAGE_SLUGS or any(path == f'page/{k}' for k in SYSTEM_PAGE_SLUGS)
+
+
+def is_external_url(url: str, request=None) -> bool:
+    """Determine whether a URL points to an external destination outside this installation."""
+    if not url:
+        return False
+
+    parsed = urlsplit(url.strip())
+    if parsed.scheme and parsed.scheme.lower() not in ('http', 'https'):
+        return True
+
+    if parsed.netloc:
+        allowed_netlocs = set()
+        site_url = getattr(settings, 'SITE_URL', '')
+        site_netloc = getattr(settings, 'SITE_NETLOC', '')
+        if not site_netloc and site_url:
+            site_netloc = urlsplit(site_url).netloc
+        if site_netloc:
+            allowed_netlocs.add(site_netloc.lower())
+        if request and hasattr(request, 'get_host'):
+            try:
+                allowed_netlocs.add(request.get_host().lower())
+            except Exception:
+                pass
+        return parsed.netloc.lower() not in allowed_netlocs
+
     return False
 
 

@@ -10,7 +10,11 @@ from django.utils.translation import gettext_lazy as _
 from django_scopes import get_scope
 
 from eventyay.base.meetup import has_video_stream, is_meetup_event
-from eventyay.base.models.page import is_system_page_configured
+from eventyay.base.models.page import (
+    is_builtin_page_url,
+    is_external_url,
+    is_system_page_configured,
+)
 from eventyay.base.models.settings import GlobalSettings
 from eventyay.base.settings import GlobalSettingsObject
 from eventyay.cfp.signals import footer_link, html_head
@@ -19,6 +23,7 @@ from eventyay.helpers.i18n import get_javascript_format, get_moment_locale, is_r
 
 from .language import get_ui_language_options
 from .text.phrases import phrases
+
 
 logger = logging.getLogger(__name__)
 
@@ -133,14 +138,14 @@ def system_information(request):
         enabled = gs.get(f'footer_link_{key}_enabled', as_type=bool, default=True)
         url = gs.get(f'footer_link_{key}_url', as_type=str, default=default_url).strip()
         if enabled and url:
-            if key in content_page_keys and not (url.startswith('http://') or url.startswith('https://')):
+            if key in content_page_keys and is_builtin_page_url(url, key, request=request):
                 if not is_system_page_configured(key, gs):
                     continue
             core_footer_links.append({
                 'key': key,
                 'label': label,
                 'url': url,
-                'target_blank': url.startswith('http://') or url.startswith('https://'),
+                'target_blank': is_external_url(url, request=request),
             })
 
     context['core_footer_links'] = core_footer_links

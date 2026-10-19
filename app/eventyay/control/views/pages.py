@@ -1,20 +1,20 @@
-import nh3
 import json
+from urllib.parse import urljoin
+
+import nh3
 from django import forms
 from django.conf import settings
 from django.contrib import messages
 from django.http import Http404, HttpResponseRedirect, JsonResponse
 from django.shortcuts import redirect
-from urllib.parse import urljoin
 from django.urls import reverse
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.utils.translation import gettext_lazy as _
 from django.views import View
 from django.views.generic import FormView, ListView, TemplateView, UpdateView
-
 from i18nfield.strings import LazyI18nString
 
-from eventyay.base.models.page import Page, is_content_empty
+from eventyay.base.models.page import SYSTEM_PAGE_SLUGS, Page, is_content_empty
 from eventyay.base.settings import GlobalSettingsObject
 from eventyay.common.permissions import is_admin_mode_active
 from eventyay.control.forms.page import PageSettingsForm
@@ -371,10 +371,44 @@ class PageDelete(AdministratorPermissionRequiredMixin, PageDetailMixin, CompatDe
 
 class ShowPageView(TemplateView):
     template_name = 'pretixcontrol/admin/pages/show.html'
+    system_page_slugs = SYSTEM_PAGE_SLUGS
+
+    def get_slug(self):
+        return self.kwargs.get('slug')
 
     def get_page(self):
+        slug = self.get_slug()
+        gs = GlobalSettingsObject().settings
+        if slug in self.system_page_slugs:
+            enabled_key = f'footer_link_{slug}_enabled'
+            if not gs.get(enabled_key, as_type=bool, default=True):
+                raise Http404(_('The requested page does not exist.'))
+
+            try:
+                page = Page.objects.get(slug=slug)
+                if not is_content_empty(page.text):
+                    return page
+            except Page.DoesNotExist:
+                pass
+
+            custom_text = gs.get(f'footer_page_{slug}_text', as_type=LazyI18nString)
+            if not is_content_empty(custom_text):
+                title_map = {
+                    'terms': _('Terms of Service'),
+                    'privacy': _('Privacy Policy'),
+                    'pricing': _('Pricing'),
+                    'support': _('Support & Help'),
+                }
+                title = title_map.get(slug, slug.capitalize())
+                return Page(
+                    title=title,
+                    slug=slug,
+                    text=custom_text,
+                )
+            raise Http404(_('The requested page does not exist.'))
+
         try:
-            return Page.objects.get(slug=self.kwargs['slug'])
+            return Page.objects.get(slug=slug)
         except Page.DoesNotExist:
             raise Http404(_('The requested page does not exist.'))
 
@@ -414,33 +448,4 @@ class SystemPageView(ShowPageView):
 
     def get_slug(self):
         return self.slug or self.kwargs.get('slug')
-
-    def get_page(self):
-        slug = self.get_slug()
-        gs = GlobalSettingsObject().settings
-        enabled_key = f'footer_link_{slug}_enabled'
-        if not gs.get(enabled_key, as_type=bool, default=True):
-            raise Http404(_('The requested page does not exist.'))
-
-        try:
-            page = Page.objects.get(slug=slug)
-            if is_content_empty(page.text):
-                raise Http404(_('The requested page does not exist.'))
-            return page
-        except Page.DoesNotExist:
-            custom_text = gs.get(f'footer_page_{slug}_text', as_type=LazyI18nString)
-            if not is_content_empty(custom_text):
-                title_map = {
-                    'terms': _('Terms of Service'),
-                    'privacy': _('Privacy Policy'),
-                    'pricing': _('Pricing'),
-                    'support': _('Support & Help'),
-                }
-                title = title_map.get(slug, slug.capitalize())
-                return Page(
-                    title=title,
-                    slug=slug,
-                    text=custom_text,
-                )
-            raise Http404(_('The requested page does not exist.'))
 
