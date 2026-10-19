@@ -32,7 +32,7 @@ def event():
 @pytest.fixture
 def ticket(event):
     """Create a sample product ticket."""
-    with scope(event=event):
+    with scope(event=event, organizer=event.organizer):
         return Product.objects.create(event=event, name='General Admission', default_price=50, admission=True)
 
 
@@ -51,7 +51,7 @@ def control_user(event):
 @override_settings(SITE_URL='https://testserver')
 def test_voucher_csv_download_includes_direct_link(client, event, ticket, control_user):
     """Verify that the exported CSV includes the Voucher link column and correct redeem URL."""
-    with scope(event=event):
+    with scope(event=event, organizer=event.organizer):
         event.vouchers.create(product=ticket, code='PROMO2026', tag='early')
 
     client.force_login(control_user)
@@ -80,14 +80,13 @@ def test_voucher_csv_download_with_subevent_link(client, event, ticket, control_
     with scopes_disabled():
         event.has_subevents = True
         event.save()
+    with scope(event=event, organizer=event.organizer):
         subevent = SubEvent.objects.create(
             event=event,
             name='Day 1',
             date_from=now(),
             active=True,
         )
-
-    with scope(event=event):
         event.vouchers.create(product=ticket, code='DAY1PASS', subevent=subevent)
 
     client.force_login(control_user)
@@ -107,7 +106,7 @@ def test_voucher_csv_download_with_subevent_link(client, event, ticket, control_
 def test_voucher_csv_download_encodes_special_characters_in_code(client, event, ticket, control_user):
     """Verify that special characters in voucher codes are properly URL-encoded in the exported link."""
     special_code = 'SPECIAL CODE & MORE'
-    with scope(event=event):
+    with scope(event=event, organizer=event.organizer):
         event.vouchers.create(product=ticket, code=special_code)
 
     client.force_login(control_user)
@@ -130,7 +129,7 @@ def test_voucher_csv_download_uses_custom_domain(client, event, ticket, control_
     with scopes_disabled():
         KnownDomain.objects.create(event=event, domainname='tickets.customdomain.org')
 
-    with scope(event=event):
+    with scope(event=event, organizer=event.organizer):
         event.vouchers.create(product=ticket, code='CUSTOMDOMAIN')
 
     client.force_login(control_user)
@@ -157,6 +156,7 @@ def test_voucher_csv_download_ignores_foreign_subevent(client, event, ticket, co
             date_from=now(),
             has_subevents=True,
         )
+    with scope(event=other_event, organizer=other_event.organizer):
         foreign_subevent = SubEvent.objects.create(
             event=other_event,
             name='Foreign Day',
@@ -164,7 +164,7 @@ def test_voucher_csv_download_ignores_foreign_subevent(client, event, ticket, co
             active=True,
         )
 
-    with scope(event=event):
+    with scope(event=event, organizer=event.organizer):
         event.vouchers.create(product=ticket, code='FOREIGNSE', subevent=foreign_subevent)
 
     client.force_login(control_user)
@@ -186,14 +186,13 @@ def test_voucher_csv_download_ignores_inactive_subevent(client, event, ticket, c
     with scopes_disabled():
         event.has_subevents = True
         event.save()
+    with scope(event=event, organizer=event.organizer):
         inactive_subevent = SubEvent.objects.create(
             event=event,
             name='Inactive Day',
             date_from=now(),
             active=False,
         )
-
-    with scope(event=event):
         event.vouchers.create(product=ticket, code='INACTIVEDAY', subevent=inactive_subevent)
 
     client.force_login(control_user)
