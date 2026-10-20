@@ -11,6 +11,7 @@ from django.http import Http404
 from django.template.loader import render_to_string
 
 from eventyay.base.models.page import (
+    get_visible_start_page_pages,
     get_visible_system_pages,
     is_builtin_page_url,
     is_content_empty,
@@ -751,10 +752,52 @@ def test_get_visible_system_pages_excludes_disabled():
             {
                 'footer_link_terms_enabled': False,
                 'footer_link_privacy_enabled': True,
+                'footer_page_privacy_text': 'Privacy content',
+                'footer_page_pricing_text': 'Pricing content',
+                'footer_page_support_text': 'Support content',
             }
         )
         get_visible_system_pages('link_in_header', gs=mock_settings)
         mock_filter.assert_called_once_with(link_in_system=True, link_in_header=True)
+        mock_qs.exclude.assert_called_once_with(slug__in=['terms'])
+
+
+def test_get_visible_system_pages_excludes_unconfigured():
+    """Verify get_visible_system_pages excludes system pages whose content is not configured."""
+    mock_qs = MagicMock()
+    with patch('eventyay.base.models.page.Page.objects.filter', return_value=mock_qs) as mock_filter:
+        mock_settings = _make_mock_settings(
+            {
+                'footer_link_terms_enabled': True,
+                'footer_link_privacy_enabled': True,
+                'footer_page_terms_text': 'Terms content',
+                'footer_page_pricing_text': 'Pricing content',
+                'footer_page_support_text': 'Support content',
+                # privacy is enabled, but has no content in settings
+            }
+        )
+        mock_empty_qs = MagicMock()
+        mock_empty_qs.__iter__.return_value = []
+        mock_filter.side_effect = [mock_qs, mock_empty_qs]
+
+        get_visible_system_pages('link_in_header', gs=mock_settings)
+        mock_qs.exclude.assert_called_once_with(slug__in=['privacy'])
+
+
+def test_get_visible_start_page_pages_excludes_disabled_and_unconfigured():
+    """Verify get_visible_start_page_pages filters by link_on_website_start_page and excludes disabled/unconfigured."""
+    mock_qs = MagicMock()
+    with patch('eventyay.base.models.page.Page.objects.filter', return_value=mock_qs) as mock_filter:
+        mock_settings = _make_mock_settings(
+            {
+                'footer_link_terms_enabled': False,
+                'footer_page_privacy_text': 'Privacy content',
+                'footer_page_pricing_text': 'Pricing content',
+                'footer_page_support_text': 'Support content',
+            }
+        )
+        get_visible_start_page_pages('link_in_header', gs=mock_settings)
+        mock_filter.assert_called_once_with(link_on_website_start_page=True, link_in_header=True)
         mock_qs.exclude.assert_called_once_with(slug__in=['terms'])
 
 

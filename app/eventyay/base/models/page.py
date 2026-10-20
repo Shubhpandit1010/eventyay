@@ -177,11 +177,52 @@ def is_external_url(url: str, request=None) -> bool:
     return False
 
 
+def get_excluded_system_slugs(gs=None) -> list[str]:
+    """Return list of SYSTEM_PAGE_SLUGS that are either disabled or have no configured content.
+
+    Inspects global settings first and queries database content for any missing slugs.
+    If a system page is disabled via ``footer_link_{slug}_enabled=False`` or both settings
+    and database text are empty, the slug is included in the excluded list.
+
+    :param gs: Optional SettingsSandbox instance.
+    :return: List of excluded slug strings.
+    """
+    try:
+        if gs is None:
+            gs = GlobalSettingsObject().settings
+
+        excluded_slugs = []
+        missing_in_settings = []
+        for slug in SYSTEM_PAGE_SLUGS:
+            if not gs.get(f'footer_link_{slug}_enabled', as_type=bool, default=True):
+                excluded_slugs.append(slug)
+                continue
+            custom_text = gs.get(f'footer_page_{slug}_text', as_type=LazyI18nString)
+            if is_content_empty(custom_text):
+                missing_in_settings.append(slug)
+
+        db_configured = set()
+        if missing_in_settings:
+            try:
+                pages = Page.objects.filter(slug__in=missing_in_settings)
+                db_configured = {p.slug for p in pages if not is_content_empty(p.text)}
+            except (DatabaseError, RuntimeError):
+                pass
+
+        for slug in missing_in_settings:
+            if slug not in db_configured:
+                excluded_slugs.append(slug)
+
+        return excluded_slugs
+    except (DatabaseError, RuntimeError):
+        return []
+
+
 def get_visible_system_pages(link_field: str, gs=None):
-    """Return Page queryset for system navigation menus, excluding disabled system pages.
+    """Return Page queryset for system navigation menus, excluding disabled or unconfigured system pages.
 
     Pages that are not system pages (slug not in SYSTEM_PAGE_SLUGS) and system pages
-    whose enabled setting is True are kept.
+    whose enabled setting is True and content is configured are kept.
 
     :param link_field: Name of the boolean field on Page ('link_in_header' or 'link_in_footer').
     :param gs: Optional SettingsSandbox instance.
@@ -189,16 +230,27 @@ def get_visible_system_pages(link_field: str, gs=None):
     """
     filter_kwargs = {'link_in_system': True, link_field: True}
     pages = Page.objects.filter(**filter_kwargs)
-    try:
-        if gs is None:
-            gs = GlobalSettingsObject().settings
-        disabled_slugs = [
-            slug for slug in SYSTEM_PAGE_SLUGS if not gs.get(f'footer_link_{slug}_enabled', as_type=bool, default=True)
-        ]
-        if disabled_slugs:
-            return pages.exclude(slug__in=disabled_slugs)
-    except (DatabaseError, RuntimeError):
-        pass
+    excluded_slugs = get_excluded_system_slugs(gs=gs)
+    if excluded_slugs:
+        return pages.exclude(slug__in=excluded_slugs)
+    return pages
+
+
+def get_visible_start_page_pages(link_field: str, gs=None):
+    """Return Page queryset for website start page navigation menus, excluding disabled or unconfigured system pages.
+
+    Pages that are not system pages (slug not in SYSTEM_PAGE_SLUGS) and system pages
+    whose enabled setting is True and content is configured are kept.
+
+    :param link_field: Name of the boolean field on Page ('link_in_header' or 'link_in_footer').
+    :param gs: Optional SettingsSandbox instance.
+    :return: Filtered Page queryset.
+    """
+    filter_kwargs = {'link_on_website_start_page': True, link_field: True}
+    pages = Page.objects.filter(**filter_kwargs)
+    excluded_slugs = get_excluded_system_slugs(gs=gs)
+    if excluded_slugs:
+        return pages.exclude(slug__in=excluded_slugs)
     return pages
 
 
