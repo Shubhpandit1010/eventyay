@@ -120,3 +120,11 @@ body.auth-page nav.navbar .navbar-header > .navbar-brand {
 
 @import "../../pretixbase/scss/_rtl.scss";
 @import "../../bootstrap/scss/_rtl.scss";
+
+/* Hide browser default password reveal and clear controls (e.g. Microsoft Edge) */
+input[type="password"]::-ms-reveal,
+input[type="password"]::-ms-clear {
+	display: none;
+	width: 0;
+	height: 0;
+}

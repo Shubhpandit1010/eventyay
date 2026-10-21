@@ -980,6 +980,13 @@ input.password_strength {
   width: 100%;
   padding-right: 40px;
 }
+/* Hide native browser password reveal and clear controls (e.g. in Microsoft Edge) to prevent duplicate icons */
+.password-input-wrapper input::-ms-reveal,
+.password-input-wrapper input::-ms-clear {
+  display: none;
+  width: 0;
+  height: 0;
+}
 .password-input-wrapper .js-password-toggle {
   position: absolute;
   right: 12px;
