@@ -778,6 +778,36 @@ def test_templates_page_hides_system_edit_without_settings_permission(
 
 @pytest.mark.django_db
 @override_settings(DEBUG=True)
+def test_system_template_edit_view(client, event):
+    """Verify system email template edit view renders cleanly with responsive form classes and assets."""
+    user = User.objects.create_user('settingsadmin@dummy.dummy', 'dummy')
+    team = Team.objects.create(
+        organizer=event.organizer,
+        can_change_event_settings=True,
+    )
+    team.members.add(user)
+    team.limit_events.add(event)
+    client.force_login(user)
+
+    url = reverse(
+        'control:event.mail.templates.system',
+        kwargs={
+            'organizer': event.organizer.slug,
+            'event': event.slug,
+            'template_key': 'order_placed',
+        },
+    )
+    response = client.get(url)
+    assert response.status_code == 200
+    content = response.rendered_content
+    assert 'mail-template-system-form' in content
+    assert 'mail_send_order_placed_attendee' in content
+    assert 'preview-panel' in content
+    assert 'tickets_email.css' in content
+
+
+@pytest.mark.django_db
+@override_settings(DEBUG=True)
 def test_custom_template_delete(logged_in_client, event, custom_template):
     from eventyay.plugins.sendmail.models import TicketMailTemplate
 
