@@ -1924,6 +1924,37 @@ class OrderTestCase(BaseQuotaTestCase):
         assert not o.has_external_refund
 
     @classscope(attr='o')
+    def test_external_refund_overpaid_clears_balance(self):
+        p = self.order.payments.create(
+            provider='manual',
+            amount=Decimal('66.00'),
+            state=OrderPayment.PAYMENT_STATE_CONFIRMED,
+        )
+        assert self.order.pending_sum == Decimal('-20.00')
+
+        r = p.create_external_refund(amount=Decimal('20.00'))
+
+        r.refresh_from_db()
+        assert r.state == OrderRefund.REFUND_STATE_DONE
+        assert r.amount == Decimal('20.00')
+        assert self.order.pending_sum == Decimal('0.00')
+
+    @classscope(attr='o')
+    def test_external_refund_does_not_clear_balance_stays_external(self):
+        p = self.order.payments.create(
+            provider='manual',
+            amount=Decimal('66.00'),
+            state=OrderPayment.PAYMENT_STATE_CONFIRMED,
+        )
+        assert self.order.pending_sum == Decimal('-20.00')
+
+        r = p.create_external_refund(amount=Decimal('10.00'))
+
+        r.refresh_from_db()
+        assert r.state == OrderRefund.REFUND_STATE_EXTERNAL
+        assert r.amount == Decimal('10.00')
+
+    @classscope(attr='o')
     def test_canceled_positions(self):
         self.op1.canceled = True
         self.op1.save()
