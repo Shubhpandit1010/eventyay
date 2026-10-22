@@ -134,10 +134,10 @@
 									svg(viewBox="0 0 24 24")
 										path(fill="currentColor", d="M12,1A5.8,5.8 0 0,1 17.8,6.8A5.8,5.8 0 0,1 12,12.6A5.8,5.8 0 0,1 6.2,6.8A5.8,5.8 0 0,1 12,1M12,15C18.63,15 24,17.67 24,21V23H0V21C0,17.67 5.37,15 12,15Z")
 								.caption.text-center
-									h4.speaker-name-caption
+									h4.speaker-name-caption(:title="speaker.name || t.speaker_fallback")
 										span.speaker-clamp {{ speaker.name || t.speaker_fallback }}
-									p.speaker-role-caption
-										span.speaker-clamp {{ speaker.speaker_role }}
+									p.speaker-role-caption(:title="speaker.speaker_role || undefined")
+										span.speaker-clamp(:class="{'is-empty': !speaker.speaker_role}", :aria-hidden="!speaker.speaker_role ? 'true' : undefined") {{ speaker.speaker_role || '\u00A0' }}
 									markdown-content.featured-speaker-preview-bio(v-if="speaker.biography", :markdown="speaker.biography")
 							.featured-speaker-social-row
 								speaker-social-links(:links="speaker.social_links", alignment="flex-start")
@@ -1125,22 +1125,31 @@ export default {
 						font-size: 20px
 						font-weight: 500
 						line-height: 1.3
-						height: calc(20px * 1.3)
-						min-height: calc(20px * 1.3)
+						height: calc(20px * 1.3 * 2)
+						min-height: calc(20px * 1.3 * 2)
+						max-height: calc(20px * 1.3 * 2)
 						overflow: hidden
 					.speaker-role-caption
 						margin: 3px 0 0
 						color: $clr-secondary-text-light
 						font-size: 14px
 						line-height: 1.3
-						height: calc(14px * 1.3)
-						min-height: calc(14px * 1.3)
+						height: calc(14px * 1.3 * 2)
+						min-height: calc(14px * 1.3 * 2)
+						max-height: calc(14px * 1.3 * 2)
 						overflow: hidden
 					.speaker-clamp
-						display: block
-						white-space: nowrap
+						display: -webkit-box
+						-webkit-line-clamp: 2
+						line-clamp: 2
+						-webkit-box-orient: vertical
 						overflow: hidden
 						text-overflow: ellipsis
+						word-break: break-word
+						overflow-wrap: anywhere
+						text-align: center
+						&.is-empty
+							visibility: hidden
 					.featured-speaker-preview-bio
 						margin: 4px 0 0
 						color: $clr-secondary-text-light
@@ -1161,15 +1170,18 @@ export default {
 								&:last-child
 									margin-bottom: 0
 
-		.featured-speaker-summary:hover .thumbnail .caption,
-		.featured-speaker-summary:focus-within .thumbnail .caption,
 		.featured-speaker-card[open] .featured-speaker-summary .thumbnail .caption
 			h4.speaker-name-caption,
 			.speaker-role-caption
 				height: auto
+				min-height: 0
+				max-height: none
 				overflow: visible
 				background: $clr-white
 			.speaker-clamp
+				display: block
+				-webkit-line-clamp: unset
+				line-clamp: unset
 				white-space: normal
 				overflow: visible
 				text-overflow: clip
@@ -1330,11 +1342,27 @@ export default {
 			font-weight: 600
 			font-size: 16px
 			margin-bottom: 2px
+			display: -webkit-box
+			-webkit-line-clamp: 2
+			line-clamp: 2
+			-webkit-box-orient: vertical
+			overflow: hidden
+			text-overflow: ellipsis
+			word-break: break-word
+			overflow-wrap: anywhere
 		.speaker-role
 			font-size: 13px
 			color: $clr-secondary-text-light
 			line-height: 1.3
 			margin-bottom: 4px
+			display: -webkit-box
+			-webkit-line-clamp: 2
+			line-clamp: 2
+			-webkit-box-orient: vertical
+			overflow: hidden
+			text-overflow: ellipsis
+			word-break: break-word
+			overflow-wrap: anywhere
 		.biography
 			font-size: 14px
 			color: $clr-secondary-text-light
