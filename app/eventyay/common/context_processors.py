@@ -1,12 +1,13 @@
 import logging
 import warnings
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import DatabaseError
 from django.http import Http404, HttpRequest
-from django.urls import resolve
+from django.urls import Resolver404, resolve
 from django.utils import translation
 from django.utils.translation import gettext_lazy as _
 from django_scopes import get_scope
@@ -79,6 +80,20 @@ def locale_context(request):
     return context
 
 
+def main_site_route_exists(url: str) -> bool:
+    """Return whether a main-site path has a route of its own, not the organizer catch-all."""
+    if not url.startswith('/') or url.startswith('//'):
+        return True
+    path = urlsplit(url).path
+    for candidate in (path, path if path.endswith('/') else f'{path}/'):
+        try:
+            match = resolve(candidate, urlconf=settings.ROOT_URLCONF)
+        except Resolver404:
+            continue
+        return 'organizer' not in match.kwargs
+    return False
+
+
 def messages(request):
     """Expose the shared phrase catalog to templates."""
     return {'phrases': phrases}
@@ -141,7 +156,7 @@ def system_information(request):
     ]
 
     core_footer_links = []
-    content_page_keys = {'terms', 'privacy', 'pricing', 'support'}
+    content_page_keys = {'terms', 'privacy', 'support'}
 
     # Batch check system page content: inspect global settings first,
     # then batch query only missing slugs, caching on request if available.
@@ -172,6 +187,9 @@ def system_information(request):
     for key, label, default_url in core_footer_items:
         enabled = gs.get(f'footer_link_{key}_enabled', as_type=bool, default=True)
         url = gs.get(f'footer_link_{key}_url', as_type=str, default=default_url).strip()
+        if key == 'pricing' and not main_site_route_exists(url):
+            # Core has no pricing page; a plugin such as eventyay-business provides it.
+            continue
         if enabled and url:
             if key in content_page_keys and is_builtin_page_url(url, key, request=request):
                 if key not in configured_pages:

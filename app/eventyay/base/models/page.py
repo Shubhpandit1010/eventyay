@@ -15,7 +15,7 @@ from eventyay.base.models import LoggedModel
 from eventyay.base.settings import GlobalSettingsObject
 
 
-SYSTEM_PAGE_SLUGS = {'terms', 'privacy', 'pricing', 'support'}
+SYSTEM_PAGE_SLUGS = {'terms', 'privacy', 'support'}
 
 
 def validate_footer_url(value: str) -> None:

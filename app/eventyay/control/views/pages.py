@@ -441,7 +441,6 @@ class ShowPageView(TemplateView):
                 title_map = {
                     'terms': _('Terms of Service'),
                     'privacy': _('Privacy Policy'),
-                    'pricing': _('Pricing'),
                     'support': _('Support & Help'),
                 }
                 title = title_map.get(slug, slug.capitalize())

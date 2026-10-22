@@ -97,7 +97,7 @@ def test_footer_content_form_footer_defaults():
     for key in ['events', 'terms', 'privacy', 'pricing', 'documentation', 'support']:
         assert f'footer_link_{key}_enabled' in form.fields
         assert f'footer_link_{key}_url' in form.fields
-    for page_key in ['terms', 'privacy', 'pricing', 'support']:
+    for page_key in ['terms', 'privacy', 'support']:
         page_form = DefaultPageContentForm(obj=mock_obj, slug=page_key)
         field_name = f'footer_page_{page_key}_text'
         assert field_name in page_form.fields
@@ -204,6 +204,7 @@ def test_context_processor_core_footer_links(rf):
                 'footer_link_privacy_enabled': True,
                 'footer_page_privacy_text': 'Privacy text',
                 'footer_link_pricing_enabled': True,
+                'footer_link_pricing_url': 'https://eventyay.com/pricing',
                 'footer_page_pricing_text': 'Pricing text',
                 'footer_link_documentation_enabled': True,
                 'footer_link_support_enabled': True,
@@ -857,6 +858,7 @@ def test_context_processor_skips_db_query_when_settings_text_present(rf):
                 'footer_link_privacy_enabled': True,
                 'footer_page_privacy_text': 'Privacy configured',
                 'footer_link_pricing_enabled': True,
+                'footer_link_pricing_url': 'https://eventyay.com/pricing',
                 'footer_page_pricing_text': 'Pricing configured',
                 'footer_link_support_enabled': True,
                 'footer_page_support_text': 'Support configured',
