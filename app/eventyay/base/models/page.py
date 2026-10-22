@@ -1,5 +1,6 @@
 import html
 import json
+import logging
 import re
 from typing import Any
 from urllib.parse import urlsplit
@@ -15,20 +16,27 @@ from eventyay.base.models import LoggedModel
 from eventyay.base.settings import GlobalSettingsObject
 
 
+logger = logging.getLogger(__name__)
+
 SYSTEM_PAGE_SLUGS = {'terms', 'privacy', 'support'}
 
 
 def validate_footer_url(value: str) -> None:
-    """Validate a footer URL or path, rejecting malformed values.
-
-    Raises ValidationError if the URL is malformed (e.g. invalid IPv6 host).
-    """
+    """Validate a footer URL or path, rejecting malformed values (e.g. invalid port or missing host)."""
     if not value or not str(value).strip():
         return
+    s = str(value).strip()
     try:
-        urlsplit(str(value).strip())
+        parsed = urlsplit(s)
+        # Accessing port triggers ValueError on invalid/non-numeric port values like :abc
+        if parsed.port:
+            pass
     except ValueError as e:
         raise ValidationError(_('Please enter a valid URL or path.')) from e
+
+    if parsed.scheme and parsed.scheme.lower() in ('http', 'https'):
+        if not parsed.hostname:
+            raise ValidationError(_('Please enter a valid URL with a hostname.'))
 
 
 def is_content_empty(content: Any) -> bool:
@@ -64,12 +72,79 @@ def is_content_empty(content: Any) -> bool:
     return not _has_visible_text(data)
 
 
+def get_page_by_slug(slug: str, gs=None) -> 'Page | None':
+    """Resolve the canonical Page instance for a slug with consistent precedence and usable row selection.
+
+    Applies case normalization, system page settings fallback, and deterministic row selection
+    so public rendering and signup confirmation agree on the exact same content.
+    """
+    if not slug:
+        return None
+    slug = slug.strip().lower()
+    if gs is None:
+        try:
+            gs = GlobalSettingsObject().settings
+        except (DatabaseError, RuntimeError) as exc:
+            logger.warning('Failed to load global settings in get_page_by_slug(%s): %s', slug, exc)
+            gs = None
+
+    if slug in SYSTEM_PAGE_SLUGS:
+        if gs is not None:
+            enabled_key = f'footer_link_{slug}_enabled'
+            if not gs.get(enabled_key, as_type=bool, default=True):
+                return None
+
+            custom_text = gs.get(f'footer_page_{slug}_text', as_type=LazyI18nString)
+            if not is_content_empty(custom_text):
+                title_map = {
+                    'terms': _('Terms of Service'),
+                    'privacy': _('Privacy Policy'),
+                    'support': _('Support & Help'),
+                }
+                title = title_map.get(slug, slug.capitalize())
+                return Page(
+                    title=title,
+                    slug=slug,
+                    text=custom_text,
+                )
+
+    page = Page.objects.filter(slug=slug).first()
+    if not page:
+        page = Page.objects.filter(slug__iexact=slug).first()
+    if page and is_content_empty(page.text):
+        has_content = (
+            Page.objects.filter(slug=slug)
+            .exclude(text__isnull=True)
+            .exclude(text='')
+            .exclude(text='{}')
+            .first()
+        )
+        if has_content and not is_content_empty(has_content.text):
+            page = has_content
+        else:
+            has_content_iexact = (
+                Page.objects.filter(slug__iexact=slug)
+                .exclude(text__isnull=True)
+                .exclude(text='')
+                .exclude(text='{}')
+                .first()
+            )
+            if has_content_iexact and not is_content_empty(has_content_iexact.text):
+                page = has_content_iexact
+
+    if slug in SYSTEM_PAGE_SLUGS:
+        if page and not is_content_empty(page.text):
+            return page
+        return None
+    return page
+
+
 def is_system_page_configured(
     slug: str,
     gs=None,
     db_pages_with_content: set[str] | dict[str, Any] | None = None,
 ) -> bool:
-    """Check whether a system page (e.g. terms, privacy, pricing, support) has content configured.
+    """Check whether a system page (e.g. terms, privacy, support) has content configured.
 
     :param slug: The system page slug.
     :param gs: Optional SettingsSandbox instance.
@@ -77,6 +152,9 @@ def is_system_page_configured(
         content in the database. When provided, avoids database queries.
     :return: True if the page has non-empty text in settings or the database.
     """
+    if not slug:
+        return False
+    slug = slug.strip().lower()
     if gs is None:
         gs = GlobalSettingsObject().settings
     custom_text = gs.get(f'footer_page_{slug}_text', as_type=LazyI18nString)
@@ -91,7 +169,7 @@ def is_system_page_configured(
             return page is not None and not is_content_empty(page.text)
 
     try:
-        page = Page.objects.filter(slug=slug).first()
+        page = get_page_by_slug(slug, gs=gs)
         if page and not is_content_empty(page.text):
             return True
     except (DatabaseError, ObjectDoesNotExist, RuntimeError):
@@ -177,48 +255,75 @@ def is_external_url(url: str, request=None) -> bool:
     return False
 
 
-def get_excluded_system_slugs(gs=None) -> list[str]:
+def get_excluded_system_slugs(gs=None, request=None) -> list[str]:
     """Return list of SYSTEM_PAGE_SLUGS that are either disabled or have no configured content.
 
     Inspects global settings first and queries database content for any missing slugs.
     If a system page is disabled via ``footer_link_{slug}_enabled=False`` or both settings
     and database text are empty, the slug is included in the excluded list.
 
+    Note on in-flight concurrency: Navigation queries reflect the configuration state at the
+    time of query construction. As with standard Django querysets, an in-flight HTTP request
+    snapshot reflects configuration at request processing time.
+
     :param gs: Optional SettingsSandbox instance.
+    :param request: Optional HttpRequest instance for request-scoped caching.
     :return: List of excluded slug strings.
     """
+    if request is not None:
+        cached = getattr(request, '_excluded_system_slugs', None)
+        if cached is not None:
+            return cached
+
     try:
         if gs is None:
             gs = GlobalSettingsObject().settings
+    except (DatabaseError, RuntimeError) as exc:
+        logger.warning('Failed to load global settings for system page navigation: %s', exc)
+        return list(SYSTEM_PAGE_SLUGS)
 
-        excluded_slugs = []
-        missing_in_settings = []
-        for slug in SYSTEM_PAGE_SLUGS:
+    excluded_slugs = []
+    missing_in_settings = []
+    for slug in SYSTEM_PAGE_SLUGS:
+        try:
             if not gs.get(f'footer_link_{slug}_enabled', as_type=bool, default=True):
                 excluded_slugs.append(slug)
                 continue
             custom_text = gs.get(f'footer_page_{slug}_text', as_type=LazyI18nString)
             if is_content_empty(custom_text):
                 missing_in_settings.append(slug)
+        except (DatabaseError, RuntimeError) as exc:
+            logger.warning('Failed to read setting for system page %s: %s', slug, exc)
+            excluded_slugs.append(slug)
 
-        db_configured = set()
-        if missing_in_settings:
-            try:
-                pages = Page.objects.filter(slug__in=missing_in_settings)
-                db_configured = {p.slug for p in pages if not is_content_empty(p.text)}
-            except (DatabaseError, RuntimeError):
-                pass
+    db_configured = set()
+    db_lookup_failed = False
+    if missing_in_settings:
+        try:
+            pages = Page.objects.filter(slug__in=missing_in_settings).order_by('-id')
+            for p in pages:
+                if not is_content_empty(p.text):
+                    db_configured.add(p.slug.lower())
+        except (DatabaseError, RuntimeError) as exc:
+            logger.warning('Failed to query database pages for navigation: %s', exc)
+            db_lookup_failed = True
 
-        for slug in missing_in_settings:
-            if slug not in db_configured:
-                excluded_slugs.append(slug)
+    for slug in missing_in_settings:
+        if db_lookup_failed:
+            continue
+        if slug not in db_configured:
+            excluded_slugs.append(slug)
 
-        return excluded_slugs
-    except (DatabaseError, RuntimeError):
-        return []
+    if request is not None:
+        try:
+            request._excluded_system_slugs = excluded_slugs
+        except AttributeError:
+            pass
+
+    return excluded_slugs
 
 
-def get_visible_system_pages(link_field: str, gs=None):
+def get_visible_system_pages(link_field: str, gs=None, request=None):
     """Return Page queryset for system navigation menus, excluding disabled or unconfigured system pages.
 
     Pages that are not system pages (slug not in SYSTEM_PAGE_SLUGS) and system pages
@@ -226,17 +331,18 @@ def get_visible_system_pages(link_field: str, gs=None):
 
     :param link_field: Name of the boolean field on Page ('link_in_header' or 'link_in_footer').
     :param gs: Optional SettingsSandbox instance.
+    :param request: Optional HttpRequest instance for request-scoped caching.
     :return: Filtered Page queryset.
     """
     filter_kwargs = {'link_in_system': True, link_field: True}
     pages = Page.objects.filter(**filter_kwargs)
-    excluded_slugs = get_excluded_system_slugs(gs=gs)
+    excluded_slugs = get_excluded_system_slugs(gs=gs, request=request)
     if excluded_slugs:
         return pages.exclude(slug__in=excluded_slugs)
     return pages
 
 
-def get_visible_start_page_pages(link_field: str, gs=None):
+def get_visible_start_page_pages(link_field: str, gs=None, request=None):
     """Return Page queryset for website start page navigation menus, excluding disabled or unconfigured system pages.
 
     Pages that are not system pages (slug not in SYSTEM_PAGE_SLUGS) and system pages
@@ -244,11 +350,12 @@ def get_visible_start_page_pages(link_field: str, gs=None):
 
     :param link_field: Name of the boolean field on Page ('link_in_header' or 'link_in_footer').
     :param gs: Optional SettingsSandbox instance.
+    :param request: Optional HttpRequest instance for request-scoped caching.
     :return: Filtered Page queryset.
     """
     filter_kwargs = {'link_on_website_start_page': True, link_field: True}
     pages = Page.objects.filter(**filter_kwargs)
-    excluded_slugs = get_excluded_system_slugs(gs=gs)
+    excluded_slugs = get_excluded_system_slugs(gs=gs, request=request)
     if excluded_slugs:
         return pages.exclude(slug__in=excluded_slugs)
     return pages

@@ -893,3 +893,142 @@ def test_allowed_netlocs_and_hostname_comparison(rf):
                 assert is_builtin_page_url('https://eventyay.org:8000/terms', 'terms', request=request) is True
                 assert is_external_url('https://eventyay.org:8000/terms', request=request) is False
                 assert is_external_url('https://othersite.com/terms', request=request) is True
+
+
+def test_form_initialization_does_not_persist_defaults():
+    """Verify that initializing Pages admin forms does not persist default values into settings."""
+    mock_obj = MagicMock()
+    mock_obj.settings = _make_mock_settings()
+    form = FooterContentForm(obj=mock_obj)
+    # Check that defaults are present in initial but not written via settings.set
+    assert form.initial.get('footer_link_terms_enabled') is True
+    assert form.initial.get('footer_link_terms_url') == '/terms'
+    mock_obj.settings.set.assert_not_called()
+
+    default_form = DefaultPageContentForm(obj=mock_obj, slug='terms')
+    assert default_form.initial.get('footer_link_terms_enabled') is True
+    assert default_form.initial.get('footer_link_terms_url') == '/terms'
+    mock_obj.settings.set.assert_not_called()
+
+
+def test_validate_footer_url_malformed_ports_and_missing_hosts():
+    """Verify validate_footer_url rejects non-numeric ports and HTTP(S) URLs missing a host."""
+    with pytest.raises(ValidationError):
+        validate_footer_url('https://')
+
+    with pytest.raises(ValidationError):
+        validate_footer_url('http://')
+
+    with pytest.raises(ValidationError):
+        validate_footer_url('https://example.com:abc/terms')
+
+    # Valid URLs with or without ports must pass without exception
+    validate_footer_url('https://example.com:8080/terms')
+    validate_footer_url('https://example.com/terms')
+    validate_footer_url('/terms')
+
+
+def test_page_settings_form_rejects_reserved_system_slugs():
+    """Verify PageSettingsForm rejects case variants of reserved system page slugs."""
+    from eventyay.control.forms.page import PageSettingsForm
+
+    for reserved in ['terms', 'TERMS', 'Privacy', 'support']:
+        form = PageSettingsForm(data={'title': 'Test Page', 'slug': reserved})
+        assert not form.is_valid()
+        assert 'slug' in form.errors
+        assert any('reserved' in str(err).lower() for err in form.errors['slug'])
+
+
+def test_get_page_by_slug_case_and_usable_row_selection():
+    """Verify get_page_by_slug normalizes case and selects the first row with non-empty content."""
+    from eventyay.base.models.page import Page, get_page_by_slug
+
+    mock_settings = _make_mock_settings(
+        {
+            'footer_link_terms_enabled': True,
+            'footer_page_terms_text': 'Terms from settings',
+        }
+    )
+
+    # System page requested with uppercase slug returns settings content
+    page = get_page_by_slug('TERMS', gs=mock_settings)
+    assert page is not None
+    assert page.text == 'Terms from settings'
+
+    # When multiple DB rows exist for custom slug, the one with content is chosen
+    empty_row = Page(id=1, slug='custom', text='')
+    valid_row = Page(id=2, slug='custom', text='Usable content')
+
+    def filter_mock(*args, **kwargs):
+        m = MagicMock()
+        # When querying for rows with content via exclude, return valid_row
+        m.first.return_value = valid_row
+        # When first called without exclude, return empty_row
+        m_initial = MagicMock()
+        m_initial.first.return_value = empty_row
+        m_initial.exclude.return_value.exclude.return_value.exclude.return_value = m
+        return m_initial
+
+    with patch('eventyay.base.models.page.Page.objects.filter', side_effect=filter_mock):
+        custom_page = get_page_by_slug('CUSTOM', gs=mock_settings)
+        assert custom_page is not None
+        assert custom_page.text == 'Usable content'
+
+
+def test_signup_confirmation_pages_prefers_settings_text(rf):
+    """Verify SignupView.confirmation_pages uses the same precedence as ShowPageView."""
+    from eventyay.base.models.page import Page
+    from eventyay.eventyay_common.views.custom import SignupView
+
+    view = SignupView()
+    view.request = rf.get('/signup')
+
+    db_terms_page = Page(id=1, slug='terms', confirmation_required=True, text='DB old terms')
+    mock_qs = MagicMock()
+    mock_qs.order_by.return_value = [db_terms_page]
+
+    with patch('eventyay.base.models.page.Page.objects.filter', return_value=mock_qs):
+        with patch('eventyay.base.models.page.GlobalSettingsObject') as mock_gso:
+            mock_gso.return_value.settings = _make_mock_settings(
+                {
+                    'footer_link_terms_enabled': True,
+                    'footer_page_terms_text': 'Settings active terms',
+                }
+            )
+            pages = view.confirmation_pages
+            assert len(pages) == 1
+            assert pages[0].text == 'Settings active terms'
+
+
+def test_get_excluded_system_slugs_error_handling_and_caching(rf):
+    """Verify get_excluded_system_slugs handles settings/DB failures and caches on request."""
+    from django.db import DatabaseError
+
+    from eventyay.base.models.page import SYSTEM_PAGE_SLUGS, get_excluded_system_slugs
+
+    request = rf.get('/')
+
+    # 1. When settings load fails with DatabaseError, all system pages are excluded as fail-safe
+    with patch('eventyay.base.models.page.GlobalSettingsObject') as mock_gso:
+        mock_gso.side_effect = DatabaseError('Settings table unreachable')
+        excluded = get_excluded_system_slugs()
+        assert set(excluded) == SYSTEM_PAGE_SLUGS
+
+    # 2. When DB lookup fails, warning is logged and enabled pages are not falsely excluded
+    mock_settings = _make_mock_settings(
+        {
+            'footer_link_terms_enabled': True,
+            'footer_link_privacy_enabled': True,
+            'footer_link_support_enabled': True,
+        }
+    )
+    with patch('eventyay.base.models.page.Page.objects.filter', side_effect=DatabaseError('DB down')):
+        with patch('eventyay.base.models.page.logger.warning') as mock_log:
+            excluded = get_excluded_system_slugs(gs=mock_settings)
+            assert mock_log.called
+            # None of the enabled pages are excluded due to DB query failure
+            assert 'terms' not in excluded
+
+    # 3. Request caching: second call with same request reuses cache
+    request._excluded_system_slugs = ['cached_slug']
+    assert get_excluded_system_slugs(request=request) == ['cached_slug']

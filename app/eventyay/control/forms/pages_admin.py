@@ -89,9 +89,9 @@ class PageContentSettingsForm(SettingsForm):
     def __init__(self, *args, **kwargs):
         """Initialize the settings form and configure active page locales."""
         self.obj = kwargs.pop('obj', None) or GlobalSettingsObject()
-        self._apply_setting_defaults()
         self._page_locales = self._resolve_page_locales(args, kwargs)
         super().__init__(*args, obj=self.obj, **kwargs)
+        self._apply_setting_defaults()
         self._build_dynamic_fields()
         self._add_page_locales_field()
         self._restrict_locales()
@@ -351,10 +351,10 @@ class FooterContentForm(PageContentSettingsForm):
     )
 
     def _apply_setting_defaults(self):
-        """Apply default configuration values for unset footer link settings."""
+        """Populate default values for unset footer link settings into initial data without persisting."""
         for key, value in FOOTER_LINK_DEFAULTS.items():
             if self.obj.settings.get(key) is None:
-                self.obj.settings.set(key, value)
+                self.initial.setdefault(key, value)
 
     def clean(self):
         """Validate footer URLs and additional footer link against malformed syntax."""
@@ -435,13 +435,13 @@ class DefaultPageContentForm(PageContentSettingsForm):
         return self.slug in CONTENT_PAGE_SLUGS
 
     def _apply_setting_defaults(self):
-        """Ensure default enabled and URL settings exist for this default page."""
+        """Populate default enabled and URL settings into initial data without persisting."""
         enabled_key = f'footer_link_{self.slug}_enabled'
         url_key = f'footer_link_{self.slug}_url'
         if self.obj.settings.get(enabled_key) is None:
-            self.obj.settings.set(enabled_key, FOOTER_LINK_DEFAULTS.get(enabled_key, True))
+            self.initial.setdefault(enabled_key, FOOTER_LINK_DEFAULTS.get(enabled_key, True))
         if self.obj.settings.get(url_key) is None:
-            self.obj.settings.set(url_key, FOOTER_LINK_DEFAULTS.get(url_key, f'/{self.slug}'))
+            self.initial.setdefault(url_key, FOOTER_LINK_DEFAULTS.get(url_key, f'/{self.slug}'))
 
     def _build_dynamic_fields(self):
         """Construct form fields for the default page."""

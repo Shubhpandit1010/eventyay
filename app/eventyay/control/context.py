@@ -166,7 +166,7 @@ def _default_context(request):
 
     ctx['talk_hostname'] = settings.TALK_HOSTNAME
 
-    ctx['show_link_in_header_for_all_pages'] = get_visible_system_pages('link_in_header')
-    ctx['show_link_in_footer_for_all_pages'] = get_visible_system_pages('link_in_footer')
+    ctx['show_link_in_header_for_all_pages'] = get_visible_system_pages('link_in_header', request=request)
+    ctx['show_link_in_footer_for_all_pages'] = get_visible_system_pages('link_in_footer', request=request)
 
     return ctx

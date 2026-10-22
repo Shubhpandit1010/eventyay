@@ -216,7 +216,7 @@ def _default_context(request):
         if ctx['talks_published']:
             ctx['user_has_cfp_submissions'] = user_has_cfp_submissions(request, request.event)
 
-    ctx['show_link_in_header_for_all_pages'] = get_visible_system_pages('link_in_header')
-    ctx['show_link_in_footer_for_all_pages'] = get_visible_system_pages('link_in_footer')
+    ctx['show_link_in_header_for_all_pages'] = get_visible_system_pages('link_in_header', request=request)
+    ctx['show_link_in_footer_for_all_pages'] = get_visible_system_pages('link_in_footer', request=request)
 
     return ctx

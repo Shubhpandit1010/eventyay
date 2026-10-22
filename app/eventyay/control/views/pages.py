@@ -429,8 +429,37 @@ class ShowPageView(TemplateView):
 
     def get_page(self):
         """Resolve Page instance from DB or fallback to global settings text for system pages."""
-        slug = self.get_slug()
+        raw_slug = self.get_slug()
+        if not raw_slug:
+            raise Http404(_('The requested page does not exist.'))
+        slug = str(raw_slug).strip().lower()
         gs = GlobalSettingsObject().settings
+
+        def _get_db_page(lookup_slug):
+            page = Page.objects.filter(slug=lookup_slug).first()
+            if not page:
+                page = Page.objects.filter(slug__iexact=lookup_slug).first()
+            if page and is_content_empty(page.text):
+                has_content = (
+                    Page.objects.filter(slug=lookup_slug)
+                    .exclude(text__isnull=True)
+                    .exclude(text='')
+                    .exclude(text='{}')
+                    .first()
+                )
+                if has_content and not is_content_empty(has_content.text):
+                    return has_content
+                has_content_iexact = (
+                    Page.objects.filter(slug__iexact=lookup_slug)
+                    .exclude(text__isnull=True)
+                    .exclude(text='')
+                    .exclude(text='{}')
+                    .first()
+                )
+                if has_content_iexact and not is_content_empty(has_content_iexact.text):
+                    return has_content_iexact
+            return page
+
         if slug in self.system_page_slugs:
             enabled_key = f'footer_link_{slug}_enabled'
             if not gs.get(enabled_key, as_type=bool, default=True):
@@ -450,13 +479,13 @@ class ShowPageView(TemplateView):
                     text=custom_text,
                 )
 
-            page = Page.objects.filter(slug=slug).first()
+            page = _get_db_page(slug)
             if page and not is_content_empty(page.text):
                 return page
 
             raise Http404(_('The requested page does not exist.'))
 
-        page = Page.objects.filter(slug=slug).first()
+        page = _get_db_page(slug)
         if page:
             return page
         raise Http404(_('The requested page does not exist.'))
@@ -468,8 +497,8 @@ class ShowPageView(TemplateView):
         ctx['page'] = page
         ctx['staff_session'] = is_admin_mode_active(self.request)
         ctx['nav_items'] = get_global_navigation(self.request) if self.request.user.is_authenticated else []
-        ctx['show_link_in_header_for_all_pages'] = get_visible_system_pages('link_in_header')
-        ctx['show_link_in_footer_for_all_pages'] = get_visible_system_pages('link_in_footer')
+        ctx['show_link_in_header_for_all_pages'] = get_visible_system_pages('link_in_header', request=self.request)
+        ctx['show_link_in_footer_for_all_pages'] = get_visible_system_pages('link_in_footer', request=self.request)
 
         attributes = {
             **nh3.ALLOWED_ATTRIBUTES,

@@ -129,10 +129,10 @@ def _common_base_context(request):
     }
     ctx['nav_items'] = get_global_navigation(request) if request.user.is_authenticated else []
     ctx['show_link_in_header_for_start_page'] = get_visible_start_page_pages(
-        'link_in_header', gs=settings_obj
+        'link_in_header', gs=settings_obj, request=request
     )
     ctx['show_link_in_footer_for_start_page'] = get_visible_start_page_pages(
-        'link_in_footer', gs=settings_obj
+        'link_in_footer', gs=settings_obj, request=request
     )
     header_image = settings_obj.get('startpage_header_image', as_type=str, default='')
     if header_image.startswith('file://'):
