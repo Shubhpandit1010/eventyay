@@ -2048,6 +2048,7 @@ class OrderPayment(models.Model):
             self.local_id = (self.order.payments.aggregate(m=Max('local_id'))['m'] or 0) + 1
         super().save(*args, **kwargs)
 
+    @transaction.atomic
     def create_external_refund(self, amount=None, execution_date=None, info='{}'):
         """
         This should be called to create an OrderRefund object when a refund has triggered
@@ -2062,6 +2063,27 @@ class OrderPayment(models.Model):
         :type info: str
         :return: OrderRefund
         """
+        # Serialize refund creation and balance checking per order
+        locked_order = Order.objects.select_for_update().get(pk=self.order.pk)
+        self.order = locked_order
+
+        # Idempotency check: if info specifies a transaction ID, check for existing refund
+        trans_id = None
+        if info:
+            try:
+                info_dict = json.loads(info) if isinstance(info, str) else info
+                trans_id = info_dict.get('trans_id')
+            except (ValueError, TypeError):
+                pass
+
+        if trans_id is not None:
+            for existing_refund in self.order.refunds.filter(provider=self.provider):
+                try:
+                    if existing_refund.info_data.get('trans_id') == trans_id:
+                        return existing_refund
+                except Exception:
+                    continue
+
         r = self.order.refunds.create(
             state=OrderRefund.REFUND_STATE_EXTERNAL,
             source=OrderRefund.REFUND_SOURCE_EXTERNAL,
@@ -2080,7 +2102,13 @@ class OrderPayment(models.Model):
             },
         )
 
-        if self.order.pending_sum + r.amount == Decimal('0.00'):
+        # Include existing external refunds when determining whether this refund settles the remaining overpayment
+        existing_external_refunds = self.order.refunds.filter(state=OrderRefund.REFUND_STATE_EXTERNAL).exclude(pk=r.pk)
+        existing_external_sum = existing_external_refunds.aggregate(s=Sum('amount'))['s'] or Decimal('0.00')
+
+        if self.order.pending_sum + existing_external_sum + r.amount == Decimal('0.00'):
+            for prior_refund in existing_external_refunds:
+                prior_refund.done()
             r.done()
 
         return r
