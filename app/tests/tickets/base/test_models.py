@@ -1,3 +1,4 @@
+import json
 import datetime
 import sys
 import time
@@ -1205,9 +1206,9 @@ class OrderTestCase(BaseQuotaTestCase):
                 expires=now() + timedelta(days=5),
                 total=46,
             )
-            self.quota.items.add(self.item1)
-            self.op1 = OrderPosition.objects.create(order=self.order, item=self.item1, variation=None, price=23)
-            self.op2 = OrderPosition.objects.create(order=self.order, item=self.item1, variation=None, price=23)
+            self.quota.products.add(self.item1)
+            self.op1 = OrderPosition.objects.create(order=self.order, product=self.item1, variation=None, price=23)
+            self.op2 = OrderPosition.objects.create(order=self.order, product=self.item1, variation=None, price=23)
 
     @classscope(attr='o')
     def test_paid_in_time(self):
