@@ -1,3 +1,5 @@
+from django.db.models import Case, Q, Value, When
+from django.db.models.functions import Concat
 from django.utils.translation import gettext
 from i18nfield.strings import LazyI18nString
 
@@ -37,10 +39,10 @@ def vouchers_send(
                 locale=event.settings.locale,
             )
             logs = []
+            sent_note = gettext('The voucher has been sent to {recipient}.').format(recipient=r['email'])
             for v in voucher_list:
                 if r.get('tag') and r.get('tag') != v.tag:
                     v.tag = r.get('tag')
-                sent_note = gettext('The voucher has been sent to {recipient}.').format(recipient=r['email'])
                 if v.comment:
                     v.comment += f'\n\n{sent_note}'
                 else:
@@ -58,7 +60,18 @@ def vouchers_send(
                         save=False,
                     )
                 )
-            Voucher.objects.bulk_update(voucher_list, fields=['comment', 'tag'], batch_size=500)
+
+            update_kwargs = {
+                'comment': Case(
+                    When(Q(comment='') | Q(comment__isnull=True), then=Value(sent_note)),
+                    default=Concat('comment', Value(f'\n\n{sent_note}')),
+                ),
+            }
+            if r.get('tag'):
+                update_kwargs['tag'] = r['tag']
+
+            if voucher_list:
+                Voucher.objects.filter(id__in=[v.id for v in voucher_list]).update(**update_kwargs)
             LogEntry.objects.bulk_create(logs, batch_size=500)
 
             if progress and ir % 50 == 0:

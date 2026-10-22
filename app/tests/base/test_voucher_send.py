@@ -1,5 +1,8 @@
 from unittest.mock import MagicMock, patch
 
+from django.db.models import Case
+from django.db.models.functions import Concat
+
 from eventyay.base.services.vouchers import vouchers_send
 
 
@@ -18,13 +21,14 @@ def test_vouchers_send_preserves_existing_comment():
 
     with (
         patch('eventyay.base.services.vouchers.Voucher.objects.filter') as mock_v_filter,
-        patch('eventyay.base.services.vouchers.Voucher.objects.bulk_update') as mock_bulk_update,
         patch('eventyay.base.services.vouchers.User.objects.get', return_value=mock_user),
         patch('eventyay.base.services.vouchers.LogEntry.objects.bulk_create'),
         patch('eventyay.base.services.vouchers.get_email_context', return_value={}),
         patch('eventyay.base.services.vouchers.mail'),
     ):
-        mock_v_filter.return_value.order_by.return_value = [mock_voucher]
+        mock_qs = MagicMock()
+        mock_qs.order_by.return_value = [mock_voucher]
+        mock_v_filter.return_value = mock_qs
 
         vouchers_send(
             event=mock_event,
@@ -39,7 +43,9 @@ def test_vouchers_send_preserves_existing_comment():
             'Reserved for keynote speaker\n\n'
             'The voucher has been sent to speaker@example.com.'
         )
-        mock_bulk_update.assert_called_once_with([mock_voucher], fields=['comment', 'tag'], batch_size=500)
+        mock_qs.update.assert_called_once()
+        call_kwargs = mock_qs.update.call_args.kwargs
+        assert isinstance(call_kwargs['comment'], Case)
 
 
 def test_vouchers_send_sets_note_when_no_prior_comment():
@@ -57,13 +63,14 @@ def test_vouchers_send_sets_note_when_no_prior_comment():
 
     with (
         patch('eventyay.base.services.vouchers.Voucher.objects.filter') as mock_v_filter,
-        patch('eventyay.base.services.vouchers.Voucher.objects.bulk_update') as mock_bulk_update,
         patch('eventyay.base.services.vouchers.User.objects.get', return_value=mock_user),
         patch('eventyay.base.services.vouchers.LogEntry.objects.bulk_create'),
         patch('eventyay.base.services.vouchers.get_email_context', return_value={}),
         patch('eventyay.base.services.vouchers.mail'),
     ):
-        mock_v_filter.return_value.order_by.return_value = [mock_voucher]
+        mock_qs = MagicMock()
+        mock_qs.order_by.return_value = [mock_voucher]
+        mock_v_filter.return_value = mock_qs
 
         vouchers_send(
             event=mock_event,
@@ -75,7 +82,9 @@ def test_vouchers_send_sets_note_when_no_prior_comment():
         )
 
         assert mock_voucher.comment == 'The voucher has been sent to attendee@example.com.'
-        mock_bulk_update.assert_called_once_with([mock_voucher], fields=['comment', 'tag'], batch_size=500)
+        mock_qs.update.assert_called_once()
+        call_kwargs = mock_qs.update.call_args.kwargs
+        assert isinstance(call_kwargs['comment'], Case)
 
 
 def test_vouchers_send_multiple_recipients():
@@ -90,13 +99,14 @@ def test_vouchers_send_multiple_recipients():
 
     with (
         patch('eventyay.base.services.vouchers.Voucher.objects.filter') as mock_v_filter,
-        patch('eventyay.base.services.vouchers.Voucher.objects.bulk_update') as mock_bulk_update,
         patch('eventyay.base.services.vouchers.User.objects.get', return_value=mock_user),
         patch('eventyay.base.services.vouchers.LogEntry.objects.bulk_create'),
         patch('eventyay.base.services.vouchers.get_email_context', return_value={}),
         patch('eventyay.base.services.vouchers.mail'),
     ):
-        mock_v_filter.return_value.order_by.return_value = [v1, v2]
+        mock_qs = MagicMock()
+        mock_qs.order_by.return_value = [v1, v2]
+        mock_v_filter.return_value = mock_qs
 
         vouchers_send(
             event=mock_event,
@@ -114,4 +124,53 @@ def test_vouchers_send_multiple_recipients():
         assert 'The voucher has been sent to user1@example.com.' in v2.comment
         assert not v2.comment.startswith('\n')
         assert v1.comment == 'Existing note\n\nThe voucher has been sent to user2@example.com.'
-        assert mock_bulk_update.call_count == 2
+        assert mock_qs.update.call_count == 2
+
+
+def test_vouchers_send_atomic_update_expression_prevents_stale_comment_overwrite():
+    """Verify vouchers_send uses atomic Case/Concat expression on database column (#6645).
+
+    Rather than writing the stale in-memory comment with bulk_update, it updates the
+    database row atomically using Concat('comment', ...), ensuring concurrent organizer
+    edits to the voucher comment are not overwritten.
+    """
+    mock_event = MagicMock()
+    mock_event.settings.locale = 'en'
+
+    mock_voucher = MagicMock(id=10, code='V10', tag='old_tag', comment='Original')
+    mock_user = MagicMock()
+
+    with (
+        patch('eventyay.base.services.vouchers.Voucher.objects.filter') as mock_v_filter,
+        patch('eventyay.base.services.vouchers.User.objects.get', return_value=mock_user),
+        patch('eventyay.base.services.vouchers.LogEntry.objects.bulk_create'),
+        patch('eventyay.base.services.vouchers.get_email_context', return_value={}),
+        patch('eventyay.base.services.vouchers.mail'),
+    ):
+        mock_qs = MagicMock()
+        mock_qs.order_by.return_value = [mock_voucher]
+        mock_v_filter.return_value = mock_qs
+
+        vouchers_send(
+            event=mock_event,
+            vouchers=[10],
+            subject='Subject',
+            message='Message: {voucher_list}',
+            recipients=[{'email': 'test@example.com', 'number': 1, 'tag': 'new_tag'}],
+            user=1,
+        )
+
+        # Ensure filter called for voucher IDs update
+        mock_v_filter.assert_called_with(id__in=[10])
+        mock_qs.update.assert_called_once()
+
+        call_kwargs = mock_qs.update.call_args.kwargs
+        assert call_kwargs['tag'] == 'new_tag'
+
+        case_expr = call_kwargs['comment']
+        assert isinstance(case_expr, Case)
+        # Default expression must be Concat referencing the DB 'comment' field
+        assert isinstance(case_expr.default, Concat)
+        default_repr = repr(case_expr.default)
+        assert 'comment' in default_repr
+        assert 'The voucher has been sent to test@example.com.' in default_repr
