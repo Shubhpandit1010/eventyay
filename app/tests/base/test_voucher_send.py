@@ -1,6 +1,6 @@
 from unittest.mock import MagicMock, patch
 
-from django.db.models import Case
+from django.db.models import Case, TextField
 from django.db.models.functions import Concat
 
 from eventyay.base.services.vouchers import vouchers_send
@@ -169,8 +169,10 @@ def test_vouchers_send_atomic_update_expression_prevents_stale_comment_overwrite
 
         case_expr = call_kwargs['comment']
         assert isinstance(case_expr, Case)
+        assert isinstance(case_expr.output_field, TextField)
         # Default expression must be Concat referencing the DB 'comment' field
         assert isinstance(case_expr.default, Concat)
+        assert isinstance(case_expr.default.output_field, TextField)
         default_repr = repr(case_expr.default)
         assert 'comment' in default_repr
         assert 'The voucher has been sent to test@example.com.' in default_repr
