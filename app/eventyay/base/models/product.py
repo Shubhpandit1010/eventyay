@@ -1569,7 +1569,7 @@ class Question(LoggedModel):
 
     @staticmethod
     def clean_products(event, products):
-        for product in products:
+        for product in products or []:
             if event != product.event:
                 raise ValidationError(_('One or more products do not belong to this event.'))
 
@@ -1796,13 +1796,15 @@ class Quota(LoggedModel):
 
     @staticmethod
     def clean_variations(products, variations):
+        products = products or []
         for variation in variations or []:
             if variation.product not in products:
                 raise ValidationError(_('All variations must belong to an product contained in the products list.'))
 
     @staticmethod
     def clean_products(event, products, variations):
-        for product in products:
+        variations = variations or []
+        for product in products or []:
             if event != product.event:
                 raise ValidationError(_('One or more products do not belong to this event.'))
             if product.has_variations:

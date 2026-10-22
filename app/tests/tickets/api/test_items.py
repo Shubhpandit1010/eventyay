@@ -1743,6 +1743,55 @@ def test_quota_create_with_subevent(token_client, organizer, event, event3, item
 
 
 @pytest.mark.django_db
+def test_quota_create_omitted_products(token_client, organizer, event):
+    resp = token_client.post(
+        '/api/v1/organizers/{}/events/{}/quotas/'.format(organizer.slug, event.slug),
+        {
+            'name': 'Main quota',
+            'size': 10,
+        },
+        format='json',
+    )
+    assert resp.status_code == 201
+    with scopes_disabled():
+        quota = Quota.objects.get(pk=resp.data['id'])
+        assert quota.name == 'Main quota'
+        assert quota.items.count() == 0
+
+
+@pytest.mark.django_db
+def test_quota_create_variations_without_products_returns_400(token_client, organizer, event, item):
+    variation = item.variations.create(value='Standard')
+    resp = token_client.post(
+        '/api/v1/organizers/{}/events/{}/quotas/'.format(organizer.slug, event.slug),
+        {
+            'name': 'Quota with variation only',
+            'size': 10,
+            'variations': [variation.pk],
+        },
+        format='json',
+    )
+    assert resp.status_code == 400
+    assert 'All variations must belong to an item contained in the items list.' in resp.content.decode() or 'products list' in resp.content.decode()
+
+
+@pytest.mark.django_db
+def test_quota_create_item_with_variations_omitted_variations_returns_400(token_client, organizer, event, item):
+    item.variations.create(value='Standard')
+    resp = token_client.post(
+        '/api/v1/organizers/{}/events/{}/quotas/'.format(organizer.slug, event.slug),
+        {
+            'name': 'Quota without variations',
+            'size': 10,
+            'items': [item.pk],
+        },
+        format='json',
+    )
+    assert resp.status_code == 400
+    assert 'variations list' in resp.content.decode()
+
+
+@pytest.mark.django_db
 def test_quota_update(token_client, organizer, event, quota, item):
     resp = token_client.patch(
         '/api/v1/organizers/{}/events/{}/quotas/{}/'.format(organizer.slug, event.slug, quota.pk),
@@ -2060,6 +2109,25 @@ def test_question_create(token_client, organizer, event, event2, item):
         assert len(question.items.all()) == 1
         assert question.dependency_question is None
         assert question.dependency_values == []
+
+
+@pytest.mark.django_db
+def test_question_create_omitted_products(token_client, organizer, event):
+    resp = token_client.post(
+        '/api/v1/organizers/{}/events/{}/questions/'.format(organizer.slug, event.slug),
+        {
+            'question': "What's your name?",
+            'type': 'S',
+            'required': False,
+            'identifier': None,
+        },
+        format='json',
+    )
+    assert resp.status_code == 201
+    with scopes_disabled():
+        question = Question.objects.get(pk=resp.data['id'])
+        assert question.question == "What's your name?"
+        assert question.items.count() == 0
 
 
 @pytest.mark.django_db

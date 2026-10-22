@@ -3679,13 +3679,13 @@ class SubEvent(EventMixin, LoggedModel):
 
     @staticmethod
     def clean_products(event, products):
-        for product in products:
+        for product in products or []:
             if event != product.event:
                 raise ValidationError(_('One or more products do not belong to this event.'))
 
     @staticmethod
     def clean_variations(event, variations):
-        for variation in variations:
+        for variation in variations or []:
             if event != variation.product.event:
                 raise ValidationError(_('One or more variations do not belong to this event.'))
 
