@@ -86,7 +86,11 @@ def test_action_required_lists_pending_approvals(client, env):
     assert 'Action required' in content
     assert 'Approval pending' in content
     assert 'td-action-card td-action-warning' in content
-    assert '?status=pa' in content
+    orders_url = reverse(
+        'control:event.orders',
+        kwargs={'organizer': env['organizer'].slug, 'event': env['event'].slug},
+    )
+    assert f'href="{orders_url}?status=pa" class="td-action-btn">Show orders pending approval</a>' in content
 
 
 @pytest.mark.django_db

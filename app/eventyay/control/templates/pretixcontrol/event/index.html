@@ -31,6 +31,7 @@
         {% endwith %}
         {% endwith %}
     {% endif %}
+    {% eventsignal request.event "eventyay.control.signals.event_dashboard_top" request=request %}
     {% if has_overpaid_orders or has_pending_orders_with_full_payment or has_pending_refunds or has_cancellation_requests or has_pending_approvals or actions %}
         {% url 'control:event.orders' event=request.event.slug organizer=request.event.organizer.slug as orders_url %}
         <div class="td-dashboard">
@@ -135,7 +136,6 @@
             </section>
         </div>
     {% endif %}
-    {% eventsignal request.event "eventyay.control.signals.event_dashboard_top" request=request %}
 
     {% if request.event.has_subevents %}
         <form class="form-inline helper-display-inline" action="" method="get">
