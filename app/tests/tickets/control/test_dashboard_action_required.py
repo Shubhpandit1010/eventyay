@@ -84,7 +84,7 @@ def test_action_required_lists_pending_approvals(client, env):
     content = response.content.decode()
     assert 'dashboard-attention' in content
     assert 'Action required' in content
-    assert 'Pending approvals' in content
+    assert 'Approval pending' in content
     assert 'attention-item attention-warning' in content
     assert '?status=pa' in content
 

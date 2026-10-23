@@ -36,8 +36,13 @@
                     <li class="attention-item attention-danger">
                         <span class="fa fa-exclamation-circle attention-icon" aria-hidden="true"></span>
                         <div class="attention-body">
-                            <h3 class="attention-title">{% trans "Overpaid orders detected" %}</h3>
-                            <p>{% trans "Some orders were paid more than once, for example due to duplicate payment attempts. Review them and consider refunding the overpaid amount." %}</p>
+                            <h3 class="attention-title">{% trans "Overpaid" %}</h3>
+                            <p>
+                                {% blocktrans trimmed %}
+                                    This event contains <strong>overpaid orders</strong>, for example due to duplicate payment attempts.
+                                    You should review the cases and consider refunding the overpaid amount to the user.
+                                {% endblocktrans %}
+                            </p>
                         </div>
                         <a href="{{ orders_url }}?status=overpaid" class="btn btn-default attention-action">{% trans "Show overpaid orders" %}</a>
                     </li>
@@ -46,8 +51,14 @@
                     <li class="attention-item attention-danger">
                         <span class="fa fa-exclamation-circle attention-icon" aria-hidden="true"></span>
                         <div class="attention-body">
-                            <h3 class="attention-title">{% trans "Paid orders not marked as paid" %}</h3>
-                            <p>{% trans "Some orders are fully paid but not marked as paid, probably because no quota was left when the payment arrived. Refund the customer or create more space." %}</p>
+                            <h3 class="attention-title">{% trans "Pending (but fully paid)" %}</h3>
+                            <p>
+                                {% blocktrans trimmed %}
+                                    This event contains <strong>fully paid orders</strong> that are not marked as paid, probably
+                                    because no quota was left at the time their payment arrived. You should review the cases and consider
+                                    either refunding the customer or creating more space.
+                                {% endblocktrans %}
+                            </p>
                         </div>
                         <a href="{{ orders_url }}?status=pendingpaid" class="btn btn-default attention-action">{% trans "Show affected orders" %}</a>
                     </li>
@@ -56,8 +67,12 @@
                     <li class="attention-item attention-warning">
                         <span class="fa fa-exclamation-triangle attention-icon" aria-hidden="true"></span>
                         <div class="attention-body">
-                            <h3 class="attention-title">{% trans "Pending refunds" %}</h3>
-                            <p>{% trans "There are refunds that still need to be processed." %}</p>
+                            <h3 class="attention-title">{% trans "Refunds" %}</h3>
+                            <p>
+                                {% blocktrans trimmed %}
+                                    This event contains <strong>pending refunds</strong> that you should take care of.
+                                {% endblocktrans %}
+                            </p>
                         </div>
                         <a href="{% url "control:event.orders.refunds" event=request.event.slug organizer=request.event.organizer.slug %}" class="btn btn-default attention-action">{% trans "Show pending refunds" %}</a>
                     </li>
@@ -66,8 +81,12 @@
                     <li class="attention-item attention-warning">
                         <span class="fa fa-exclamation-triangle attention-icon" aria-hidden="true"></span>
                         <div class="attention-body">
-                            <h3 class="attention-title">{% trans "Cancellation requests" %}</h3>
-                            <p>{% trans "Customers have asked to cancel their orders." %}</p>
+                            <h3 class="attention-title">{% trans "Cancellation requested" %}</h3>
+                            <p>
+                                {% blocktrans trimmed %}
+                                    This event contains <strong>requested cancellations</strong> that you should take care of.
+                                {% endblocktrans %}
+                            </p>
                         </div>
                         <a href="{{ orders_url }}?status=rc" class="btn btn-default attention-action">{% trans "Show orders requesting cancellation" %}</a>
                     </li>
@@ -76,8 +95,12 @@
                     <li class="attention-item attention-warning">
                         <span class="fa fa-exclamation-triangle attention-icon" aria-hidden="true"></span>
                         <div class="attention-body">
-                            <h3 class="attention-title">{% trans "Pending approvals" %}</h3>
-                            <p>{% trans "There are orders awaiting your approval." %}</p>
+                            <h3 class="attention-title">{% trans "Approval pending" %}</h3>
+                            <p>
+                                {% blocktrans trimmed %}
+                                    This event contains <strong>pending approvals</strong> that you should take care of.
+                                {% endblocktrans %}
+                            </p>
                         </div>
                         <a href="{{ orders_url }}?status=pa" class="btn btn-default attention-action">{% trans "Show orders pending approval" %}</a>
                     </li>
@@ -97,7 +120,7 @@
                 {% endfor %}
             </ul>
             {% if actions %}
-                <a class="attention-more" href="{% url "control:event.requiredactions" event=request.event.slug organizer=request.event.organizer.slug %}">{% trans "Show all notifications" %}</a>
+                <a class="attention-more" href="{% url "control:event.requiredactions" event=request.event.slug organizer=request.event.organizer.slug %}">{% trans "Show more" %}</a>
             {% endif %}
         </section>
     {% endif %}
