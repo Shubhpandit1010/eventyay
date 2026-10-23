@@ -1,8 +1,14 @@
+import datetime
+import os
+import socket
 from unittest.mock import MagicMock, patch
 
+import pytest
 from django.db.models import Case, TextField
 from django.db.models.functions import Concat
+from django_scopes import scopes_disabled
 
+from eventyay.base.models import Event, Organizer, User, Voucher
 from eventyay.base.services.vouchers import vouchers_send
 
 
@@ -176,3 +182,86 @@ def test_vouchers_send_atomic_update_expression_prevents_stale_comment_overwrite
         default_repr = repr(case_expr.default)
         assert 'comment' in default_repr
         assert 'The voucher has been sent to test@example.com.' in default_repr
+
+
+def _is_db_available():
+    if os.environ.get('CI') == 'true':
+        return True
+    if os.path.exists('/var/run/postgresql/.s.PGSQL.5432'):
+        return True
+    try:
+        with socket.create_connection(('127.0.0.1', 5432), timeout=0.5):
+            return True
+    except OSError:
+        return False
+
+
+@pytest.mark.skipif(not _is_db_available(), reason='PostgreSQL database is not available')
+@pytest.mark.django_db
+def test_vouchers_send_database_backed_event_scoped_update():
+    """Verify vouchers_send persists comment updates to the real DB with event scoping (#6645).
+
+    Exercises the real event-scoped update instead of mocking Voucher.objects.filter.
+    Covers vouchers with existing and empty comments, refreshes them from the database,
+    asserts persisted comment values, and verifies that a voucher from another event
+    remains unchanged.
+    """
+    with scopes_disabled():
+        organizer = Organizer.objects.create(name='Organizer A', slug='org-a-vs')
+        event1 = Event.objects.create(
+            organizer=organizer,
+            name='Event 1',
+            slug='event-1-vs',
+            date_from=datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC),
+        )
+        event2 = Event.objects.create(
+            organizer=organizer,
+            name='Event 2',
+            slug='event-2-vs',
+            date_from=datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC),
+        )
+        user = User.objects.create_user('admin-vs@example.com', 'dummy')
+
+        v1 = Voucher.objects.create(
+            event=event1,
+            code='VOUCHER1',
+            comment='Existing staff comment',
+        )
+        v2 = Voucher.objects.create(
+            event=event1,
+            code='VOUCHER2',
+            comment='',
+        )
+        v_other = Voucher.objects.create(
+            event=event2,
+            code='VOUCHER_OTHER',
+            comment='Other event comment',
+        )
+
+    with (
+        patch('eventyay.base.services.vouchers.mail'),
+        patch('eventyay.base.services.vouchers.get_email_context', return_value={}),
+    ):
+        vouchers_send(
+            event=event1,
+            vouchers=[v1.id, v2.id, v_other.id],
+            subject='Your voucher',
+            message='Code: {voucher_list}',
+            recipients=[
+                {'email': 'recipient1@example.com', 'number': 1},
+                {'email': 'recipient2@example.com', 'number': 1},
+            ],
+            user=user.id,
+        )
+
+    v1.refresh_from_db()
+    v2.refresh_from_db()
+    v_other.refresh_from_db()
+
+    # vouchers.pop() assigns v2 to recipient1 and v1 to recipient2
+    assert v1.comment == (
+        'Existing staff comment\n\n'
+        'The voucher has been sent to recipient2@example.com.'
+    )
+    assert v2.comment == 'The voucher has been sent to recipient1@example.com.'
+    assert v_other.comment == 'Other event comment'

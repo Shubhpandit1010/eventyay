@@ -19,7 +19,8 @@ def vouchers_send(
     user: int,
     progress=None,
 ) -> None:
-    vouchers = list(Voucher.objects.filter(id__in=vouchers).order_by('id'))
+    with scope(event=event):
+        vouchers = list(Voucher.objects.filter(id__in=vouchers).order_by('id'))
     user = User.objects.get(pk=user)
     for ir, r in enumerate(recipients):
         voucher_list = []
