@@ -70,7 +70,7 @@ class ActionView(View):
                     if r_cand.info_data.get('trans_id') == trans.pk:
                         existing_ref = r_cand
                         break
-                except Exception:
+                except (ValueError, TypeError, AttributeError):
                     continue
             if existing_ref:
                 with transaction.atomic():

@@ -2073,7 +2073,7 @@ class OrderPayment(models.Model):
             try:
                 info_dict = json.loads(info) if isinstance(info, str) else info
                 trans_id = info_dict.get('trans_id')
-            except (ValueError, TypeError):
+            except (ValueError, TypeError, AttributeError):
                 pass
 
         if trans_id is not None:
@@ -2081,7 +2081,7 @@ class OrderPayment(models.Model):
                 try:
                     if existing_refund.info_data.get('trans_id') == trans_id:
                         return existing_refund
-                except Exception:
+                except (ValueError, TypeError, AttributeError):
                     continue
 
         r = self.order.refunds.create(

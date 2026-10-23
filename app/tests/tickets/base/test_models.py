@@ -2007,6 +2007,34 @@ class OrderTestCase(BaseQuotaTestCase):
         r2 = p.create_external_refund(amount=Decimal('10.00'), info=info)
         assert r1.pk == r2.pk
         assert self.order.refunds.filter(provider='manual').count() == 1
+    @classscope(attr='o')
+    def test_external_refund_handles_non_object_or_malformed_info(self):
+        p = self.order.payments.create(
+            provider='manual',
+            amount=Decimal('66.00'),
+            state=OrderPayment.PAYMENT_STATE_CONFIRMED,
+        )
+        self.order.refunds.create(
+            provider='manual',
+            amount=Decimal('5.00'),
+            source=OrderRefund.REFUND_SOURCE_EXTERNAL,
+            state=OrderRefund.REFUND_STATE_EXTERNAL,
+            info='[1, 2, 3]',
+        )
+        self.order.refunds.create(
+            provider='manual',
+            amount=Decimal('5.00'),
+            source=OrderRefund.REFUND_SOURCE_EXTERNAL,
+            state=OrderRefund.REFUND_STATE_EXTERNAL,
+            info='{invalid json',
+        )
+        r1 = p.create_external_refund(amount=Decimal('5.00'), info='12345')
+        assert r1.state == OrderRefund.REFUND_STATE_EXTERNAL
+
+        info = json.dumps({'trans_id': 8888})
+        r2 = p.create_external_refund(amount=Decimal('5.00'), info=info)
+        r3 = p.create_external_refund(amount=Decimal('5.00'), info=info)
+        assert r2.pk == r3.pk
 
     @classscope(attr='o')
     def test_canceled_positions(self):
