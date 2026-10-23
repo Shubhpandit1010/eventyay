@@ -70,7 +70,7 @@ def test_action_required_hidden_when_nothing_needs_attention(client, env):
     client.force_login(env['user_with_perm'])
     response = client.get(_dashboard_url(env))
     assert response.status_code == 200
-    assert 'dashboard-attention' not in response.content.decode()
+    assert 'td-attention-title' not in response.content.decode()
 
 
 @pytest.mark.django_db
@@ -82,10 +82,10 @@ def test_action_required_lists_pending_approvals(client, env):
     response = client.get(_dashboard_url(env))
     assert response.status_code == 200
     content = response.content.decode()
-    assert 'dashboard-attention' in content
+    assert 'td-attention-title' in content
     assert 'Action required' in content
     assert 'Approval pending' in content
-    assert 'attention-item attention-warning' in content
+    assert 'td-action-card td-action-warning' in content
     assert '?status=pa' in content
 
 
@@ -97,4 +97,4 @@ def test_action_required_hidden_without_order_permission(client, env):
     client.force_login(env['user_no_perm'])
     response = client.get(_dashboard_url(env))
     assert response.status_code == 200
-    assert 'dashboard-attention' not in response.content.decode()
+    assert 'td-attention-title' not in response.content.decode()
