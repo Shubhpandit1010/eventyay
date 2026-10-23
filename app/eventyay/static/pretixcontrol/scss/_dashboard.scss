@@ -250,3 +250,86 @@
     width: 100%;
   }
 }
+
+// Tickets dashboard: "Action required" section
+.dashboard-section-title {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 20px 0 10px;
+}
+
+.dashboard-attention {
+  margin-bottom: 20px;
+
+  .attention-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .attention-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 15px;
+    margin-bottom: 8px;
+    border: 1px solid $gray-lighter;
+    border-left-width: 4px;
+    border-radius: 4px;
+    background: white;
+  }
+
+  .attention-danger {
+    border-left-color: $brand-danger;
+    background: tint($brand-danger, 94%);
+    .attention-icon {
+      color: $brand-danger;
+    }
+  }
+
+  .attention-warning {
+    border-left-color: $brand-warning;
+    background: tint($brand-warning, 92%);
+    .attention-icon {
+      color: darken($brand-warning, 15%);
+    }
+  }
+
+  .attention-icon {
+    flex: 0 0 auto;
+    font-size: 20px;
+  }
+
+  .attention-body {
+    flex: 1 1 auto;
+    min-width: 0;
+    p {
+      margin: 2px 0 0;
+    }
+  }
+
+  .attention-title {
+    font-size: 15px;
+    font-weight: 600;
+    margin: 0;
+  }
+
+  .attention-action {
+    flex: 0 0 auto;
+    margin: 0;
+  }
+
+  .attention-more {
+    display: inline-block;
+    margin-top: 2px;
+  }
+}
+
+@media (max-width: $screen-xs-max) {
+  .dashboard-attention .attention-item {
+    flex-wrap: wrap;
+  }
+  .dashboard-attention .attention-action {
+    margin-left: 32px;
+  }
+}
