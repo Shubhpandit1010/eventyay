@@ -1924,7 +1924,7 @@ class OrderTestCase(BaseQuotaTestCase):
         assert not o.has_pending_refund
         assert not o.has_external_refund
 
-    @classscope(attr='o')
+    @classscope(attr='o', event_attr='event')
     def test_external_refund_overpaid_clears_balance(self):
         p = self.order.payments.create(
             provider='manual',
@@ -1940,7 +1940,7 @@ class OrderTestCase(BaseQuotaTestCase):
         assert r.amount == Decimal('20.00')
         assert self.order.pending_sum == Decimal('0.00')
 
-    @classscope(attr='o')
+    @classscope(attr='o', event_attr='event')
     def test_external_refund_does_not_clear_balance_stays_external(self):
         p = self.order.payments.create(
             provider='manual',
@@ -1955,7 +1955,7 @@ class OrderTestCase(BaseQuotaTestCase):
         assert r.state == OrderRefund.REFUND_STATE_EXTERNAL
         assert r.amount == Decimal('10.00')
 
-    @classscope(attr='o')
+    @classscope(attr='o', event_attr='event')
     def test_external_refund_avoids_over_refund_with_prior_external(self):
         p = self.order.payments.create(
             provider='manual',
@@ -1975,7 +1975,7 @@ class OrderTestCase(BaseQuotaTestCase):
         r2.refresh_from_db()
         assert r2.state == OrderRefund.REFUND_STATE_EXTERNAL
 
-    @classscope(attr='o')
+    @classscope(attr='o', event_attr='event')
     def test_external_refund_multiple_partial_together_clear_balance(self):
         p = self.order.payments.create(
             provider='manual',
@@ -1995,7 +1995,7 @@ class OrderTestCase(BaseQuotaTestCase):
         assert r2.state == OrderRefund.REFUND_STATE_DONE
         assert self.order.pending_sum == Decimal('0.00')
 
-    @classscope(attr='o')
+    @classscope(attr='o', event_attr='event')
     def test_external_refund_idempotent_with_trans_id(self):
         p = self.order.payments.create(
             provider='manual',
@@ -2007,7 +2007,7 @@ class OrderTestCase(BaseQuotaTestCase):
         r2 = p.create_external_refund(amount=Decimal('10.00'), info=info)
         assert r1.pk == r2.pk
         assert self.order.refunds.filter(provider='manual').count() == 1
-    @classscope(attr='o')
+    @classscope(attr='o', event_attr='event')
     def test_external_refund_handles_non_object_or_malformed_info(self):
         p = self.order.payments.create(
             provider='manual',
