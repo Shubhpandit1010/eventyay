@@ -1197,7 +1197,7 @@ class InvoiceVoucherTestCase(TestCase):
 class OrderTestCase(BaseQuotaTestCase):
     def setUp(self):
         super().setUp()
-        with scope(organizer=self.o):
+        with scope(organizer=self.o), scope(event=self.event):
             self.user = User.objects.create_user('dummy@dummy.dummy', 'dummy')
             self.order = Order.objects.create(
                 status=Order.STATUS_PENDING,
