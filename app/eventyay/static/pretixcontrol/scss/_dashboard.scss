@@ -301,8 +301,12 @@
   }
 
   .attention-body {
-    flex: 1 1 auto;
+    flex: 1 1 0;
     min-width: 0;
+    // Required action messages can contain long unbroken strings (same rules as .logentry)
+    word-break: break-word;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
     p {
       margin: 2px 0 0;
     }
@@ -328,6 +332,10 @@
 @media (max-width: $screen-xs-max) {
   .dashboard-attention .attention-item {
     flex-wrap: wrap;
+  }
+  // Text fills the row next to the icon (20px) and gap (12px), so the action wraps below
+  .dashboard-attention .attention-body {
+    flex-basis: calc(100% - 32px);
   }
   .dashboard-attention .attention-action {
     margin-left: 32px;
