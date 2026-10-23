@@ -74,7 +74,7 @@
                                 {% endblocktrans %}
                             </p>
                         </div>
-                        <a href="{% url "control:event.orders.refunds" event=request.event.slug organizer=request.event.organizer.slug %}" class="btn btn-default attention-action">{% trans "Show pending refunds" %}</a>
+                        <a href="{% url 'control:event.orders.refunds' event=request.event.slug organizer=request.event.organizer.slug %}" class="btn btn-default attention-action">{% trans "Show pending refunds" %}</a>
                     </li>
                 {% endif %}
                 {% if has_cancellation_requests %}
@@ -120,7 +120,7 @@
                 {% endfor %}
             </ul>
             {% if actions %}
-                <a class="attention-more" href="{% url "control:event.requiredactions" event=request.event.slug organizer=request.event.organizer.slug %}">{% trans "Show more" %}</a>
+                <a class="attention-more" href="{% url 'control:event.requiredactions' event=request.event.slug organizer=request.event.organizer.slug %}">{% trans "Show more" %}</a>
             {% endif %}
         </section>
     {% endif %}
