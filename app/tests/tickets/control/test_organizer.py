@@ -253,3 +253,40 @@ class OrganizerTest(SoupTest):
         self.orga1.settings.flush()
         assert self.orga1.settings.primary_color == '#33c33c'
         assert called
+
+    def test_giftcards_accepted_issuers_hidden_when_no_issuers_and_no_other_organizers(self):
+        with scopes_disabled():
+            t = self.orga1.teams.first()
+            t.can_manage_gift_cards = True
+            t.save()
+        url = reverse('control:organizer.giftcards', kwargs={'organizer': self.orga1.slug})
+        doc = self.get_doc(url)
+        self.assertNotIn('Accepted gift cards of other organizers', doc.decode())
+
+    def test_giftcards_accepted_issuers_shown_when_other_organizers_available(self):
+        with scopes_disabled():
+            t = self.orga1.teams.first()
+            t.can_manage_gift_cards = True
+            t.save()
+            t2 = Team.objects.create(
+                organizer=self.orga2,
+                can_manage_gift_cards=True,
+            )
+            t2.members.add(self.user)
+        url = reverse('control:organizer.giftcards', kwargs={'organizer': self.orga1.slug})
+        doc = self.get_doc(url)
+        self.assertIn('Accepted gift cards of other organizers', doc.decode())
+        self.assertIn('name="add"', doc.decode())
+        self.assertNotIn('You are currently not accepting gift cards from other organizers.', doc.decode())
+
+    def test_giftcards_accepted_issuers_shown_when_accepted_issuer_exists(self):
+        with scopes_disabled():
+            t = self.orga1.teams.first()
+            t.can_manage_gift_cards = True
+            t.save()
+            self.orga1.gift_card_issuer_acceptance.create(issuer=self.orga2)
+        url = reverse('control:organizer.giftcards', kwargs={'organizer': self.orga1.slug})
+        doc = self.get_doc(url)
+        self.assertIn('Accepted gift cards of other organizers', doc.decode())
+        self.assertIn(self.orga2.name, doc.decode())
+        self.assertIn('name="del"', doc.decode())

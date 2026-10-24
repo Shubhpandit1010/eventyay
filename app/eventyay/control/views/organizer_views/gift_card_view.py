@@ -94,6 +94,7 @@ class GiftCardListView(OrganizerDetailViewMixin, OrganizerPermissionRequiredMixi
         ctx['other_organizers'] = self.request.user.get_organizers_with_permission(
             'can_manage_gift_cards', self.request
         ).exclude(pk=self.request.organizer.pk)
+        ctx['accepted_issuers'] = self.request.organizer.gift_card_issuer_acceptance.all().select_related('issuer')
         return ctx
 
     @cached_property
