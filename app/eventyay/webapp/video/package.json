@@ -11,6 +11,7 @@
     "lint:fix": "eslint . --ext .js,.vue --fix",
     "i18n:extract": "node ../i18n/extract.mjs extract --domain video",
     "test:i18n": "node --test \"../i18n/*.test.js\"",
+    "test": "node --test \"src/**/*.test.js\"",
     "analyze": "ANALYZE=true vite build"
   },
   "dependencies": {

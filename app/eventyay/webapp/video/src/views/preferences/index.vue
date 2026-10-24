@@ -9,7 +9,7 @@
 				avatar(:user="{profile}", :size="128")
 				bunt-button#btn-change-avatar(@click="showChangeAvatar = true") {{ $t('change avatar') }}
 			bunt-input.display-name(name="displayName", :label="`${$t('Display name')} *`", v-model.trim="profile.display_name", :validation="v$.profile.display_name")
-			template(v-if="languages")
+			template(v-if="languages && languages.length")
 				h2 {{ $t('Interface Language') }}
 				bunt-select#select-interface-language(name="interface-language", v-model="interfaceLanguage", :options="languages", option-value="code", option-label="nativeLabel", :placeholder="$t('Select Language')")
 			h2 {{ $t('Profile Visibility') }}
@@ -86,17 +86,28 @@ export default {
 		},
 		languages() {
 			const options = resolveLanguageOptions(config.locales)
-			return options.length ? options : null
+			return options.length ? options : []
+		},
+		userLocale() {
+			return this.$store?.state?.userLocale
 		}
 	},
 	watch: {
 		languages: {
 			handler(langs) {
-				if (!this.interfaceLanguage && langs?.length) {
+				const hasCurrent = langs?.some(l => l && l.code === this.interfaceLanguage)
+				if (!hasCurrent && langs?.length) {
 					this.interfaceLanguage = this.resolveInitialLanguage()
+				} else if (!langs?.length) {
+					this.interfaceLanguage = null
 				}
 			},
 			immediate: true
+		},
+		userLocale(newLocale) {
+			if (newLocale && this.languages?.length) {
+				this.interfaceLanguage = this.resolveInitialLanguage()
+			}
 		}
 	},
 	created() {
@@ -111,9 +122,10 @@ export default {
 	},
 	methods: {
 		resolveInitialLanguage() {
+			if (!this.languages || !this.languages.length) return null
 			return resolveCurrentLanguage(
 				this.languages,
-				this.$store?.state?.userLocale || this.$i18n?.language || this.$i18n?.resolvedLanguage || config.defaultLocale || config.locale || 'en'
+				this.userLocale || this.$store?.state?.userLocale || this.$i18n?.language || this.$i18n?.resolvedLanguage || config.defaultLocale || config.locale || 'en'
 			)
 		},
 		async toggleVisibility(value) {
