@@ -304,3 +304,136 @@ def test_ics_subevents_attributes(env, client):
     assert b'SE1' not in r.content
     r = client.get('/mrmcd/events/ical/?attr[loc]=B')
     assert b'SE1' in r.content
+
+
+@pytest.mark.django_db
+def test_organizer_calendar_multiple_timezones_banner(env, client):
+    with scopes_disabled():
+        e1 = Event.objects.create(
+            organizer=env[0],
+            name='Event Berlin',
+            slug='event-berlin',
+            date_from=datetime(2027, 9, 6, 10, 0, tzinfo=UTC),
+            live=True,
+            is_public=True,
+        )
+        e1.settings.timezone = 'Europe/Berlin'
+
+        e2 = Event.objects.create(
+            organizer=env[0],
+            name='Event New York',
+            slug='event-ny',
+            date_from=datetime(2027, 9, 8, 10, 0, tzinfo=UTC),
+            live=True,
+            is_public=True,
+        )
+        e2.settings.timezone = 'America/New_York'
+
+    # Month calendar
+    r = client.get('/mrmcd/?style=calendar&year=2027&month=9')
+    assert r.status_code == 200
+    assert 'Note that the events in this view are in different timezones.' in r.rendered_content
+    assert 'Europe Berlin' in r.rendered_content or 'Europe/Berlin' in r.rendered_content
+    assert 'America New York' in r.rendered_content or 'America/New_York' in r.rendered_content
+
+    # Week calendar (week 36 of 2027 contains Sept 6-8)
+    r = client.get('/mrmcd/?style=week&year=2027&week=36')
+    assert r.status_code == 200
+    assert 'Note that the events in this view are in different timezones.' in r.rendered_content
+
+
+@pytest.mark.django_db
+def test_organizer_calendar_single_timezone_no_banner(env, client):
+    with scopes_disabled():
+        e1 = Event.objects.create(
+            organizer=env[0],
+            name='Event Berlin 1',
+            slug='event-berlin-1',
+            date_from=datetime(2027, 9, 6, 10, 0, tzinfo=UTC),
+            live=True,
+            is_public=True,
+        )
+        e1.settings.timezone = 'Europe/Berlin'
+
+        e2 = Event.objects.create(
+            organizer=env[0],
+            name='Event Berlin 2',
+            slug='event-berlin-2',
+            date_from=datetime(2027, 9, 8, 10, 0, tzinfo=UTC),
+            live=True,
+            is_public=True,
+        )
+        e2.settings.timezone = 'Europe/Berlin'
+
+    # Month calendar
+    r = client.get('/mrmcd/?style=calendar&year=2027&month=9')
+    assert r.status_code == 200
+    assert 'Note that the events in this view are in different timezones.' not in r.rendered_content
+
+    # Week calendar
+    r = client.get('/mrmcd/?style=week&year=2027&week=36')
+    assert r.status_code == 200
+    assert 'Note that the events in this view are in different timezones.' not in r.rendered_content
+
+
+@pytest.mark.django_db
+def test_organizer_calendar_subevents_multiple_timezones_banner(env, client):
+    with scopes_disabled():
+        e1 = Event.objects.create(
+            organizer=env[0],
+            name='Series Berlin',
+            slug='series-berlin',
+            date_from=datetime(2027, 9, 6, 10, 0, tzinfo=UTC),
+            live=True,
+            is_public=True,
+            has_subevents=True,
+        )
+        e1.settings.timezone = 'Europe/Berlin'
+        e1.subevents.create(
+            name='Session Berlin',
+            date_from=datetime(2027, 9, 6, 10, 0, tzinfo=UTC),
+            active=True,
+        )
+
+        e2 = Event.objects.create(
+            organizer=env[0],
+            name='Series NY',
+            slug='series-ny',
+            date_from=datetime(2027, 9, 8, 10, 0, tzinfo=UTC),
+            live=True,
+            is_public=True,
+            has_subevents=True,
+        )
+        e2.settings.timezone = 'America/New_York'
+        e2.subevents.create(
+            name='Session NY',
+            date_from=datetime(2027, 9, 8, 10, 0, tzinfo=UTC),
+            active=True,
+        )
+
+    r = client.get('/mrmcd/?style=calendar&year=2027&month=9')
+    assert r.status_code == 200
+    assert 'Note that the events in this view are in different timezones.' in r.rendered_content
+
+
+@pytest.mark.django_db
+def test_organizer_calendar_missing_or_invalid_timezone_fallback(env, client):
+    with scopes_disabled():
+        e = Event.objects.create(
+            organizer=env[0],
+            name='Event No Timezone',
+            slug='event-no-tz',
+            date_from=now() + timedelta(days=15),
+            live=True,
+            is_public=True,
+        )
+        e.settings.timezone = 'Invalid/Zone'
+
+    # Check that automatic next-event date selection handles invalid timezone without crashing
+    r = client.get('/mrmcd/?style=calendar')
+    assert r.status_code == 200
+    assert 'Event No Timezone' in r.rendered_content
+
+    r = client.get('/mrmcd/?style=week')
+    assert r.status_code == 200
+    assert 'Event No Timezone' in r.rendered_content
