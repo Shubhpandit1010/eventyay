@@ -4,7 +4,7 @@ import socket
 from unittest.mock import MagicMock, patch
 
 import pytest
-from django.db.models import Case, TextField
+from django.db.models import Case, F, TextField, Value
 from django.db.models.functions import Concat
 from django_scopes import scopes_disabled
 
@@ -179,9 +179,16 @@ def test_vouchers_send_atomic_update_expression_prevents_stale_comment_overwrite
         # Default expression must be Concat referencing the DB 'comment' field
         assert isinstance(case_expr.default, Concat)
         assert isinstance(case_expr.default.output_field, TextField)
-        default_repr = repr(case_expr.default)
-        assert 'comment' in default_repr
-        assert 'The voucher has been sent to test@example.com.' in default_repr
+        default_exprs = case_expr.default.get_source_expressions()
+        source_exprs = (
+            default_exprs[0].get_source_expressions()
+            if hasattr(default_exprs[0], 'get_source_expressions')
+            else default_exprs
+        )
+        f_expr = [e for e in source_exprs if isinstance(e, F)][0]
+        val_expr = [e for e in source_exprs if isinstance(e, Value)][0]
+        assert f_expr.name == 'comment'
+        assert 'The voucher has been sent to test@example.com.' in val_expr.value
 
 
 def _is_db_available():
@@ -254,14 +261,15 @@ def test_vouchers_send_database_backed_event_scoped_update():
             user=user.id,
         )
 
-    v1.refresh_from_db()
-    v2.refresh_from_db()
-    v_other.refresh_from_db()
+    with scopes_disabled():
+        v1.refresh_from_db()
+        v2.refresh_from_db()
+        v_other.refresh_from_db()
 
-    # vouchers.pop() assigns v2 to recipient1 and v1 to recipient2
-    assert v1.comment == (
-        'Existing staff comment\n\n'
-        'The voucher has been sent to recipient2@example.com.'
-    )
-    assert v2.comment == 'The voucher has been sent to recipient1@example.com.'
-    assert v_other.comment == 'Other event comment'
+        # vouchers.pop() assigns v2 to recipient1 and v1 to recipient2
+        assert v1.comment == (
+            'Existing staff comment\n\n'
+            'The voucher has been sent to recipient2@example.com.'
+        )
+        assert v2.comment == 'The voucher has been sent to recipient1@example.com.'
+        assert v_other.comment == 'Other event comment'
