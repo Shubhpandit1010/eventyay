@@ -64,8 +64,9 @@ def _create_pending_approval(event):
         )
 
 
+# The control middleware redirects to SITE_URL unless it matches the test client's host.
 @pytest.mark.django_db
-@override_settings(DEBUG=True)
+@override_settings(SITE_URL='https://testserver')
 def test_action_required_hidden_when_nothing_needs_attention(client, env):
     client.force_login(env['user_with_perm'])
     response = client.get(_dashboard_url(env))
@@ -74,7 +75,7 @@ def test_action_required_hidden_when_nothing_needs_attention(client, env):
 
 
 @pytest.mark.django_db
-@override_settings(DEBUG=True)
+@override_settings(SITE_URL='https://testserver')
 def test_action_required_lists_pending_approvals(client, env):
     _create_pending_approval(env['event'])
 
@@ -94,7 +95,7 @@ def test_action_required_lists_pending_approvals(client, env):
 
 
 @pytest.mark.django_db
-@override_settings(DEBUG=True)
+@override_settings(SITE_URL='https://testserver')
 def test_action_required_notification_card(client, env):
     with scope(organizer=env['organizer'], event=env['event']):
         action = RequiredAction.objects.create(event=env['event'], action_type='eventyay.event.test_notice', data='{}')
@@ -116,7 +117,7 @@ def test_action_required_notification_card(client, env):
 
 
 @pytest.mark.django_db
-@override_settings(DEBUG=True)
+@override_settings(SITE_URL='https://testserver')
 def test_action_required_hidden_without_order_permission(client, env):
     _create_pending_approval(env['event'])
 
