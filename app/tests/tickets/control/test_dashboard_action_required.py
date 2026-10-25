@@ -2,7 +2,7 @@ import pytest
 from django.test import override_settings
 from django.urls import reverse
 from django.utils.timezone import now
-from django_scopes import scopes_disabled
+from django_scopes import scope, scopes_disabled
 
 from eventyay.base.models import Event, Order, Organizer, RequiredAction, Team, User
 
@@ -52,7 +52,7 @@ def _dashboard_url(env):
 
 
 def _create_pending_approval(event):
-    with scopes_disabled():
+    with scope(organizer=event.organizer, event=event):
         Order.objects.create(
             event=event,
             status=Order.STATUS_PENDING,
@@ -96,7 +96,7 @@ def test_action_required_lists_pending_approvals(client, env):
 @pytest.mark.django_db
 @override_settings(DEBUG=True)
 def test_action_required_notification_card(client, env):
-    with scopes_disabled():
+    with scope(organizer=env['organizer'], event=env['event']):
         action = RequiredAction.objects.create(event=env['event'], action_type='eventyay.event.test_notice', data='{}')
 
     client.force_login(env['user_with_perm'])
