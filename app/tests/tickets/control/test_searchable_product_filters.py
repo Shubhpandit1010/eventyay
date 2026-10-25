@@ -4,7 +4,7 @@ import pytest
 from django.test import override_settings
 from django.urls import reverse
 from django.utils.timezone import now
-from django_scopes import scopes_disabled
+from django_scopes import scope, scopes_disabled
 
 from eventyay.base.models import Event, Order, Organizer, Product, Question, Quota, Team, User
 
@@ -19,6 +19,16 @@ def env():
             slug='dummy',
             date_from=now(),
         )
+        user = User.objects.create_user('orga@example.com', 'dummy')
+        team = Team.objects.create(
+            organizer=organizer,
+            can_view_orders=True,
+            can_view_vouchers=True,
+            can_change_items=True,
+            all_events=True,
+        )
+        team.members.add(user)
+    with scope(organizer=organizer, event=event):
         product = Product.objects.create(event=event, name='Early bird ticket', default_price=10, admission=True)
         shirt = Product.objects.create(event=event, name='Shirt', default_price=20)
         shirt.variations.create(value='Large')
@@ -33,15 +43,6 @@ def env():
         Order.objects.create(
             event=event, status=Order.STATUS_PAID, datetime=now(), expires=now(), total=10, code='FLT01'
         )
-        user = User.objects.create_user('orga@example.com', 'dummy')
-        team = Team.objects.create(
-            organizer=organizer,
-            can_view_orders=True,
-            can_view_vouchers=True,
-            can_change_items=True,
-            all_events=True,
-        )
-        team.members.add(user)
     return {
         'organizer': organizer,
         'event': event,
