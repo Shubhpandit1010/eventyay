@@ -1010,7 +1010,7 @@ pl-0 {
   white-space: nowrap;
 }
 
-@media (min-width: 768px) {
+@media (min-width: 576px) {
   .flex-sm-row {
     flex-direction: row !important;
   }

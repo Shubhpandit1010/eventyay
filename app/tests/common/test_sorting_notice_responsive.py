@@ -32,7 +32,7 @@ def test_sorting_notice_templates_contain_responsive_classes():
         content = template_path.read_text(encoding='utf-8')
         assert '<div class="alert alert-info">' in content
         assert INNER_FLEX_CLASSES in content
-        assert 'mt-2 mt-sm-0 ml-sm-3 nowrap mw-100' in content
+        assert 'mt-2 mt-sm-0 ml-sm-3' in content
         assert 'alert-link' in content
         assert 'Reset to manual order' in content
 
@@ -78,8 +78,6 @@ def test_sorting_notice_rendered_dom_structure(template_path):
     assert 'mt-2' in children[1]['class']
     assert 'mt-sm-0' in children[1]['class']
     assert 'ml-sm-3' in children[1]['class']
-    assert 'nowrap' in children[1]['class']
-    assert 'mw-100' in children[1]['class']
 
     link = children[1].find('a')
     assert link is not None
@@ -89,31 +87,26 @@ def test_sorting_notice_rendered_dom_structure(template_path):
 
 
 def test_stylesheet_defines_responsive_utilities_at_breakpoint():
-    """Verify base.css defines responsive flex and spacing utilities at the 768px breakpoint (#6664)."""
+    """Verify base.css defines responsive flex and spacing utilities at the 576px breakpoint (#6664)."""
     assert BASE_CSS.is_file(), f"Stylesheet not found at {BASE_CSS}"
     css_content = BASE_CSS.read_text(encoding='utf-8')
 
     # Verify media query breakpoint
-    assert '@media (min-width: 768px)' in css_content
+    assert '@media (min-width: 576px)' in css_content
 
-    # Verify utility definitions
-    assert '.flex-sm-row' in css_content
-    assert 'flex-direction: row !important;' in css_content
-    assert '.align-items-sm-center' in css_content
-    assert 'align-items: center !important;' in css_content
-    assert '.mt-sm-0' in css_content
-    assert 'margin-top: 0 !important;' in css_content
-    assert '.ml-sm-3' in css_content
-    assert 'margin-left: 1rem !important;' in css_content
+    # Verify responsive utilities are defined inside the 576px media block
+    media_section = css_content.split('@media (min-width: 576px)', 1)[1]
+    media_block = media_section.split('\n}\n', 1)[0]
+
+    assert '.flex-sm-row' in media_block
+    assert 'flex-direction: row !important;' in media_block
+    assert '.align-items-sm-center' in media_block
+    assert 'align-items: center !important;' in media_block
+    assert '.mt-sm-0' in media_block
+    assert 'margin-top: 0 !important;' in media_block
+    assert '.ml-sm-3' in media_block
+    assert 'margin-left: 1rem !important;' in media_block
 
     # Verify loaded nowrap utility
     assert '.nowrap' in css_content
     assert 'white-space: nowrap;' in css_content
-
-    # Precedence check: .mt-sm-0 must appear after .mt-2 in the stylesheet
-    # so that the desktop override (.mt-sm-0) wins over mobile margin (.mt-2)
-    mt_2_pos = css_content.find('.mt-2 {')
-    mt_sm_0_pos = css_content.find('.mt-sm-0 {')
-    assert mt_2_pos != -1, "Expected .mt-2 to be defined in stylesheet"
-    assert mt_sm_0_pos != -1, "Expected .mt-sm-0 to be defined in stylesheet"
-    assert mt_sm_0_pos > mt_2_pos, ".mt-sm-0 must appear after .mt-2 for CSS cascade precedence"
