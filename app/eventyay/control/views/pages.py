@@ -17,8 +17,8 @@ from i18nfield.strings import LazyI18nString
 from eventyay.base.models.page import (
     SYSTEM_PAGE_SLUGS,
     Page,
+    get_page_by_slug,
     get_visible_system_pages,
-    is_content_empty,
 )
 from eventyay.base.settings import GlobalSettingsObject
 from eventyay.common.permissions import is_admin_mode_active
@@ -428,67 +428,19 @@ class ShowPageView(TemplateView):
         return self.kwargs.get('slug')
 
     def get_page(self):
-        """Resolve Page instance from DB or fallback to global settings text for system pages."""
+        """Resolve Page instance via get_page_by_slug.
+
+        Prefers GlobalSettingsObject for system pages and falls back to database Page rows.
+        """
         raw_slug = self.get_slug()
         if not raw_slug:
             raise Http404(_('The requested page does not exist.'))
         slug = str(raw_slug).strip().lower()
         gs = GlobalSettingsObject().settings
-
-        def _get_db_page(lookup_slug):
-            page = Page.objects.filter(slug=lookup_slug).first()
-            if not page:
-                page = Page.objects.filter(slug__iexact=lookup_slug).first()
-            if page and is_content_empty(page.text):
-                has_content = (
-                    Page.objects.filter(slug=lookup_slug)
-                    .exclude(text__isnull=True)
-                    .exclude(text='')
-                    .exclude(text='{}')
-                    .first()
-                )
-                if has_content and not is_content_empty(has_content.text):
-                    return has_content
-                has_content_iexact = (
-                    Page.objects.filter(slug__iexact=lookup_slug)
-                    .exclude(text__isnull=True)
-                    .exclude(text='')
-                    .exclude(text='{}')
-                    .first()
-                )
-                if has_content_iexact and not is_content_empty(has_content_iexact.text):
-                    return has_content_iexact
-            return page
-
-        if slug in self.system_page_slugs:
-            enabled_key = f'footer_link_{slug}_enabled'
-            if not gs.get(enabled_key, as_type=bool, default=True):
-                raise Http404(_('The requested page does not exist.'))
-
-            custom_text = gs.get(f'footer_page_{slug}_text', as_type=LazyI18nString)
-            if not is_content_empty(custom_text):
-                title_map = {
-                    'terms': _('Terms of Service'),
-                    'privacy': _('Privacy Policy'),
-                    'support': _('Support & Help'),
-                }
-                title = title_map.get(slug, slug.capitalize())
-                return Page(
-                    title=title,
-                    slug=slug,
-                    text=custom_text,
-                )
-
-            page = _get_db_page(slug)
-            if page and not is_content_empty(page.text):
-                return page
-
+        page = get_page_by_slug(slug, gs=gs)
+        if not page:
             raise Http404(_('The requested page does not exist.'))
-
-        page = _get_db_page(slug)
-        if page:
-            return page
-        raise Http404(_('The requested page does not exist.'))
+        return page
 
     def get_context_data(self, **kwargs):
         """Prepare context with sanitized page content and navigation menus."""

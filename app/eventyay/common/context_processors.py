@@ -1,3 +1,4 @@
+import functools
 import logging
 import warnings
 from pathlib import Path
@@ -80,6 +81,7 @@ def locale_context(request):
     return context
 
 
+@functools.lru_cache(maxsize=128)
 def main_site_route_exists(url: str) -> bool:
     """Return whether a main-site path has a route of its own, not the organizer catch-all."""
     if not url.startswith('/') or url.startswith('//'):
@@ -101,6 +103,9 @@ def messages(request):
 
 def system_information(request):
     """Provide platform metadata, header/footer navigation links, and core footer items."""
+    if request is not None and hasattr(request, '_eventyay_system_information_cache'):
+        return request._eventyay_system_information_cache.copy()
+
     context = {
         'INSTANCE_NAME': settings.INSTANCE_NAME,
     }
@@ -216,4 +221,9 @@ def system_information(request):
         gs_obj = GlobalSettings()
         if gs_obj.settings.update_check_result_warning:
             context['warning_update_available'] = True
+    if request is not None:
+        try:
+            request._eventyay_system_information_cache = context
+        except AttributeError:
+            pass
     return context

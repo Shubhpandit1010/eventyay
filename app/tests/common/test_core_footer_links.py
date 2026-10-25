@@ -9,6 +9,7 @@ from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ValidationError
 from django.http import Http404
 from django.template.loader import render_to_string
+from i18nfield.strings import LazyI18nString
 
 from eventyay.base.models.page import (
     get_visible_start_page_pages,
@@ -1032,3 +1033,83 @@ def test_get_excluded_system_slugs_error_handling_and_caching(rf):
     # 3. Request caching: second call with same request reuses cache
     request._excluded_system_slugs = ['cached_slug']
     assert get_excluded_system_slugs(request=request) == ['cached_slug']
+
+
+def test_validate_footer_url_malformed_ipv6_and_invalid_ports():
+    """Verify validate_footer_url catches unclosed IPv6 brackets and out-of-range ports."""
+    with pytest.raises(ValidationError):
+        validate_footer_url('http://[')
+
+    with pytest.raises(ValidationError):
+        validate_footer_url('http://[::1')
+
+    with pytest.raises(ValidationError):
+        validate_footer_url('http://[:80')
+
+    with pytest.raises(ValidationError):
+        validate_footer_url('https://example.com:70000/terms')
+
+
+def test_is_content_empty_json_null_variants():
+    """Verify is_content_empty handles deserialized null and string null without crashing."""
+    assert is_content_empty('null') is True
+    assert is_content_empty(LazyI18nString('null')) is True
+    assert is_content_empty('{"en": null}') is True
+    assert is_content_empty('{"en": "null"}') is True
+    assert is_content_empty({'en': None}) is True
+    assert is_content_empty({'en': 'null'}) is True
+    assert is_content_empty({'en': '<p>   </p>'}) is True
+    assert is_content_empty({'en': '<p>Real content</p>'}) is False
+
+
+def test_system_information_request_caching(rf):
+    """Verify system_information caches result on request to prevent overhead on repeated renders."""
+    request = rf.get('/')
+    with patch('eventyay.common.context_processors.GlobalSettingsObject') as mock_gso:
+        mock_settings = _make_mock_settings(
+            {
+                'footer_link_terms_enabled': True,
+                'footer_page_terms_text': 'Terms text',
+            }
+        )
+        mock_gso.return_value.settings = mock_settings
+        ctx1 = system_information(request)
+        assert hasattr(request, '_eventyay_system_information_cache')
+
+        # Modify settings mock to verify second call returns cached result without querying
+        mock_settings.get.side_effect = AssertionError('Should not query settings again')
+        ctx2 = system_information(request)
+        assert ctx1 == ctx2
+
+
+def test_system_page_precedence_agreement():
+    """Verify is_system_page_configured and ShowPageView.get_page() agree that GlobalSettingsObject takes precedence."""
+    from eventyay.base.models.page import is_system_page_configured
+
+    view = ShowPageView()
+    view.kwargs = {'slug': 'terms'}
+
+    mock_db_page = MagicMock(title='DB Terms', slug='terms', text='Old DB Terms Content')
+
+    with patch('eventyay.base.models.page.GlobalSettingsObject') as mock_gso_model:
+        with patch('eventyay.control.views.pages.GlobalSettingsObject') as mock_gso_view:
+            mock_settings = _make_mock_settings(
+                {
+                    'footer_link_terms_enabled': True,
+                    'footer_page_terms_text': 'Global Settings Terms Content',
+                }
+            )
+            mock_gso_model.return_value.settings = mock_settings
+            mock_gso_view.return_value.settings = mock_settings
+
+            with patch('eventyay.base.models.page.Page.objects.filter') as mock_filter:
+                mock_filter.return_value.first.return_value = mock_db_page
+
+                # Both agree: GlobalSettingsObject content takes precedence
+                assert is_system_page_configured('terms', gs=mock_settings) is True
+                page = view.get_page()
+                assert page.title == 'Terms of Service'
+                assert str(page.text) == 'Global Settings Terms Content'
+                # DB filter was not called because GlobalSettings had content
+                mock_filter.assert_not_called()
+

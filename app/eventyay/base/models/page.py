@@ -28,15 +28,15 @@ def validate_footer_url(value: str) -> None:
     s = str(value).strip()
     try:
         parsed = urlsplit(s)
-        # Accessing port triggers ValueError on invalid/non-numeric port values like :abc
-        if parsed.port:
-            pass
-    except ValueError as e:
+        # Accessing port triggers ValueError on invalid/non-numeric/out-of-range port values or malformed IPv6
+        _port = parsed.port
+        hostname = parsed.hostname
+        scheme = (parsed.scheme or '').lower()
+    except (ValueError, AttributeError) as e:
         raise ValidationError(_('Please enter a valid URL or path.')) from e
 
-    if parsed.scheme and parsed.scheme.lower() in ('http', 'https'):
-        if not parsed.hostname:
-            raise ValidationError(_('Please enter a valid URL with a hostname.'))
+    if scheme in ('http', 'https') and not hostname:
+        raise ValidationError(_('Please enter a valid URL with a hostname.'))
 
 
 def is_content_empty(content: Any) -> bool:
@@ -45,6 +45,11 @@ def is_content_empty(content: Any) -> bool:
         return True
     if isinstance(content, LazyI18nString):
         data = content.data
+        if isinstance(data, str):
+            try:
+                data = json.loads(data)
+            except (json.JSONDecodeError, TypeError):
+                pass
     elif isinstance(content, str):
         try:
             data = json.loads(content)
@@ -53,13 +58,18 @@ def is_content_empty(content: Any) -> bool:
     else:
         data = content
 
-    if data is None or data == '' or (isinstance(data, (list, tuple, set, dict)) and not data):
+    # Null-guard after deserialization
+    if data is None:
+        return True
+    if data == '' or (isinstance(data, (list, tuple, set, dict)) and not data):
         return True
 
     def _has_visible_text(val: Any) -> bool:
         if val is None:
             return False
-        s = str(val)
+        s = str(val).strip()
+        if not s or s.lower() == 'null':
+            return False
         if '<' in s and '>' in s:
             s = re.sub(r'<[^>]+>', '', s)
             s = html.unescape(s).replace('\xa0', ' ')
@@ -146,6 +156,9 @@ def is_system_page_configured(
 ) -> bool:
     """Check whether a system page (e.g. terms, privacy, support) has content configured.
 
+    GlobalSettingsObject custom text takes precedence over database Page rows,
+    matching get_page_by_slug and ShowPageView.
+
     :param slug: The system page slug.
     :param gs: Optional SettingsSandbox instance.
     :param db_pages_with_content: Optional pre-fetched set or dict of slugs that have non-empty
@@ -156,10 +169,14 @@ def is_system_page_configured(
         return False
     slug = slug.strip().lower()
     if gs is None:
-        gs = GlobalSettingsObject().settings
-    custom_text = gs.get(f'footer_page_{slug}_text', as_type=LazyI18nString)
-    if not is_content_empty(custom_text):
-        return True
+        try:
+            gs = GlobalSettingsObject().settings
+        except (DatabaseError, RuntimeError):
+            gs = None
+    if gs is not None:
+        custom_text = gs.get(f'footer_page_{slug}_text', as_type=LazyI18nString)
+        if not is_content_empty(custom_text):
+            return True
 
     if db_pages_with_content is not None:
         if isinstance(db_pages_with_content, (set, frozenset, list, tuple)):
@@ -185,7 +202,7 @@ def _get_allowed_netlocs(request=None) -> set[str]:
     if not site_netloc and site_url:
         try:
             site_netloc = urlsplit(site_url).netloc
-        except ValueError:
+        except (ValueError, AttributeError):
             site_netloc = ''
     if site_netloc:
         allowed.add(site_netloc.lower())
@@ -210,19 +227,28 @@ def is_builtin_page_url(url: str, key: str | None = None, request=None) -> bool:
     if not url:
         return False
 
+    url_str = str(url).strip()
+    if url_str.startswith('/') and not url_str.startswith('//'):
+        path = url_str.split('?')[0].split('#')[0].strip('/')
+        if key:
+            return path in (key, f'page/{key}')
+        return path in SYSTEM_PAGE_SLUGS or any(path == f'page/{k}' for k in SYSTEM_PAGE_SLUGS)
+
     try:
-        parsed = urlsplit(url.strip())
-    except ValueError:
+        parsed = urlsplit(url_str)
+        _port = parsed.port
+        hostname = (parsed.hostname or '').lower()
+        netloc = (parsed.netloc or '').lower()
+        scheme = (parsed.scheme or '').lower()
+    except (ValueError, AttributeError):
         return False
 
     # Any URL with a non-HTTP(S) scheme (e.g. mailto:, tel:) is external
-    if parsed.scheme and parsed.scheme.lower() not in ('http', 'https'):
+    if scheme and scheme not in ('http', 'https'):
         return False
 
-    if parsed.netloc:
+    if netloc:
         allowed = _get_allowed_netlocs(request)
-        netloc = parsed.netloc.lower()
-        hostname = (parsed.hostname or '').lower()
         if netloc not in allowed and hostname not in allowed:
             return False
 
@@ -238,18 +264,24 @@ def is_external_url(url: str, request=None) -> bool:
     if not url:
         return False
 
-    try:
-        parsed = urlsplit(url.strip())
-    except ValueError:
+    url_str = str(url).strip()
+    if url_str.startswith('/') and not url_str.startswith('//'):
         return False
 
-    if parsed.scheme and parsed.scheme.lower() not in ('http', 'https'):
+    try:
+        parsed = urlsplit(url_str)
+        _port = parsed.port
+        hostname = (parsed.hostname or '').lower()
+        netloc = (parsed.netloc or '').lower()
+        scheme = (parsed.scheme or '').lower()
+    except (ValueError, AttributeError):
+        return False
+
+    if scheme and scheme not in ('http', 'https'):
         return True
 
-    if parsed.netloc:
+    if netloc:
         allowed = _get_allowed_netlocs(request)
-        netloc = parsed.netloc.lower()
-        hostname = (parsed.hostname or '').lower()
         return netloc not in allowed and hostname not in allowed
 
     return False
