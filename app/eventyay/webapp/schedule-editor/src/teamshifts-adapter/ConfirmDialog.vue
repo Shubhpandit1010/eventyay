@@ -1,22 +1,44 @@
 <template lang="pug">
 .ts-confirm-overlay(v-if="visible", @click="cancel")
-  .ts-confirm-panel(@click.stop="")
+  .ts-confirm-panel(
+    ref="panelRef",
+    role="dialog",
+    aria-modal="true",
+    aria-labelledby="ts-confirm-title",
+    tabindex="-1",
+    @click.stop=""
+  )
     .ts-confirm-header
-      h3 {{ title }}
-      button.modal-close-btn(type="button", :aria-label="$t('Close')", @click="cancel")
+      h3#ts-confirm-title {{ title }}
+      button.modal-close-btn(
+        type="button",
+        :aria-label="$t('Close')",
+        :disabled="busy",
+        @click="cancel"
+      )
         i.fa.fa-times(aria-hidden="true")
     p.ts-confirm-lead(v-if="lead") {{ lead }}
     p.ts-confirm-error(v-if="error") {{ error }}
     .ts-confirm-actions
-      button.btn.btn-default(type="button", :disabled="busy", @click="cancel") {{ $t('Cancel') }}
-      button.btn(:class="confirmClass || 'btn-primary'", type="button", :disabled="busy", @click="$emit('confirm')")
+      button.btn.btn-default(
+        ref="cancelBtnRef",
+        type="button",
+        :disabled="busy",
+        @click="cancel"
+      ) {{ $t('Cancel') }}
+      button.btn(
+        :class="confirmClass || 'btn-primary'",
+        type="button",
+        :disabled="busy",
+        @click="$emit('confirm')"
+      )
         | {{ confirmLabel || $t('Confirm') }}
 </template>
 
 <script lang="ts" setup>
-import { ref } from 'vue'
+import { nextTick, onBeforeUnmount, ref } from 'vue'
 
-defineProps<{
+const props = defineProps<{
   title: string
   lead?: string
   confirmLabel?: string
@@ -31,19 +53,76 @@ const emit = defineEmits<{
 }>()
 
 const visible = ref(false)
+const panelRef = ref<HTMLElement | null>(null)
+const cancelBtnRef = ref<HTMLButtonElement | null>(null)
+let previousActiveElement: HTMLElement | null = null
+
+function onKeydown(e: KeyboardEvent) {
+  if (!visible.value) return
+
+  if (e.key === 'Escape' || e.key === 'Esc') {
+    if (!props.busy) {
+      e.preventDefault()
+      e.stopPropagation()
+      cancel()
+    }
+    return
+  }
+
+  if (e.key === 'Tab') {
+    if (!panelRef.value) return
+    const focusable = panelRef.value.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    )
+    if (!focusable.length) return
+    const first = focusable[0]
+    const last = focusable[focusable.length - 1]
+
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault()
+      last.focus()
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault()
+      first.focus()
+    }
+  }
+}
 
 function show() {
+  previousActiveElement = document.activeElement as HTMLElement | null
   visible.value = true
+  window.addEventListener('keydown', onKeydown)
+  nextTick(() => {
+    if (cancelBtnRef.value) {
+      cancelBtnRef.value.focus()
+    } else if (panelRef.value) {
+      panelRef.value.focus()
+    }
+  })
 }
 
 function close() {
+  if (!visible.value) return
   visible.value = false
+  window.removeEventListener('keydown', onKeydown)
+  if (previousActiveElement && typeof previousActiveElement.focus === 'function') {
+    previousActiveElement.focus()
+    previousActiveElement = null
+  }
 }
 
 function cancel() {
+  if (props.busy) return
   close()
   emit('cancel')
 }
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onKeydown)
+  if (visible.value && previousActiveElement && typeof previousActiveElement.focus === 'function') {
+    previousActiveElement.focus()
+  }
+})
 
 defineExpose({ show, close })
 </script>
@@ -69,6 +148,7 @@ defineExpose({ show, close })
   width: 440px
   max-width: calc(100vw - 48px)
   position: relative
+  outline: none
 
   .ts-confirm-header
     display: flex
