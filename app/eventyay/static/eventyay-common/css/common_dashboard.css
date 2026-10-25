@@ -507,9 +507,6 @@ body:has(.td-dashboard) #page-content {
 .td-action-form {
   margin: auto 0 0
 }
-button.td-action-btn {
-  cursor: pointer
-}
 .td-quick-section {
   display: flex;
   align-items: center;

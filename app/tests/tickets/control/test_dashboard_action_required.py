@@ -4,7 +4,7 @@ from django.urls import reverse
 from django.utils.timezone import now
 from django_scopes import scopes_disabled
 
-from eventyay.base.models import Event, Order, Organizer, Team, User
+from eventyay.base.models import Event, Order, Organizer, RequiredAction, Team, User
 
 
 @pytest.fixture
@@ -91,6 +91,28 @@ def test_action_required_lists_pending_approvals(client, env):
         kwargs={'organizer': env['organizer'].slug, 'event': env['event'].slug},
     )
     assert f'href="{orders_url}?status=pa" class="td-action-btn">Show orders pending approval</a>' in content
+
+
+@pytest.mark.django_db
+@override_settings(DEBUG=True)
+def test_action_required_notification_card(client, env):
+    with scopes_disabled():
+        action = RequiredAction.objects.create(event=env['event'], action_type='eventyay.event.test_notice', data='{}')
+
+    client.force_login(env['user_with_perm'])
+    response = client.get(_dashboard_url(env))
+    assert response.status_code == 200
+    content = response.content.decode()
+    assert '<span class="td-action-title">Notifications</span>' in content
+    discard_url = reverse(
+        'control:event.requiredaction.discard',
+        kwargs={'organizer': env['organizer'].slug, 'event': env['event'].slug, 'id': action.pk},
+    )
+    form_start = content.index(f'action="{discard_url}"')
+    form = content[form_start : content.index('</form>', form_start)]
+    # Hiding a notification is not the main action of the card, so it uses a secondary button.
+    assert '<button type="submit" class="btn btn-default btn-sm">Hide message</button>' in form
+    assert 'td-action-btn' not in form
 
 
 @pytest.mark.django_db
