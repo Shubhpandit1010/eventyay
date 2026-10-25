@@ -5,7 +5,7 @@ import json
 from django.core import mail as djmail
 from django.test import TestCase, TransactionTestCase, override_settings
 from django.utils.timezone import now
-from django_scopes import scopes_disabled
+from django_scopes import scope, scopes_disabled
 
 from eventyay.control.forms.admin.vouchers import InvoiceVoucherForm
 from eventyay.multidomain.urlreverse import build_absolute_uri
@@ -609,11 +609,11 @@ class VoucherFormTest(SoupTestMixin, TransactionTestCase):
                 'send_recipients': 'vip1@example.com\nvip2@example.com',
             }
         )
-        with scopes_disabled():
+        with scope(event=self.event):
             v1 = self.event.vouchers.get(code='COMM1')
             v2 = self.event.vouchers.get(code='COMM2')
-        assert v1.comment.startswith('Reserved for VIP\n\nThe voucher has been sent to ')
-        assert v2.comment.startswith('Reserved for VIP\n\nThe voucher has been sent to ')
+        assert v1.comment == 'Reserved for VIP\n\nThe voucher has been sent to vip2@example.com.'
+        assert v2.comment == 'Reserved for VIP\n\nThe voucher has been sent to vip1@example.com.'
 
     def test_create_bulk_send_csv(self):
         self._create_bulk_vouchers(

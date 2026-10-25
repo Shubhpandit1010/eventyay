@@ -1,9 +1,9 @@
 import datetime
 
 import pytest
-from django_scopes import scopes_disabled
+from django_scopes import scope, scopes_disabled
 
-from eventyay.base.models import Event, Organizer, User
+from eventyay.base.models import Event, Organizer, User, Voucher
 from eventyay.base.services.vouchers import vouchers_send
 
 
@@ -18,15 +18,16 @@ def env():
             date_from=datetime.datetime(2013, 12, 26, tzinfo=datetime.UTC),
         )
         user = User.objects.create_user('test@example.com', 'test')
+    with scope(organizer=event.organizer, event=event):
         v1 = event.vouchers.create(comment='Reserved for speaker', code='TEST1')
         v2 = event.vouchers.create(comment='', code='TEST2')
-        return event, user, v1, v2
+    return event, user, v1, v2
 
 
 @pytest.mark.django_db
 def test_vouchers_send_preserves_existing_comment(env):
     event, user, v1, v2 = env
-    with scopes_disabled():
+    with scope(organizer=event.organizer, event=event):
         vouchers_send(
             event=event,
             vouchers=[v1.pk],
@@ -42,7 +43,7 @@ def test_vouchers_send_preserves_existing_comment(env):
 @pytest.mark.django_db
 def test_vouchers_send_sets_comment_when_empty(env):
     event, user, v1, v2 = env
-    with scopes_disabled():
+    with scope(organizer=event.organizer, event=event):
         vouchers_send(
             event=event,
             vouchers=[v2.pk],
@@ -53,3 +54,22 @@ def test_vouchers_send_sets_comment_when_empty(env):
         )
         v2.refresh_from_db()
         assert v2.comment == 'The voucher has been sent to attendee@example.com.'
+
+
+@pytest.mark.django_db
+def test_vouchers_send_atomic_update_prevents_stale_comment_overwrite(env):
+    event, user, v1, v2 = env
+    with scope(organizer=event.organizer, event=event):
+        v3 = event.vouchers.create(comment='Original comment', code='TEST3')
+        # Simulate concurrent staff edit before update
+        Voucher.objects.filter(pk=v3.pk).update(comment='Staff note updated concurrently')
+        vouchers_send(
+            event=event,
+            vouchers=[v3.pk],
+            subject='Your voucher',
+            message='Here is your voucher: {voucher_list}',
+            recipients=[{'email': 'concurrent@example.com', 'number': 1}],
+            user=user.pk,
+        )
+        v3.refresh_from_db()
+        assert v3.comment == 'Staff note updated concurrently\n\nThe voucher has been sent to concurrent@example.com.'
