@@ -64,6 +64,7 @@ def _pages(env):
     """(url, name of the product filter field) for every page with a product filter."""
     return [
         (_url(env, 'control:event.orders'), 'product'),
+        (_url(env, 'control:event.orders.search'), 'expert-product'),
         (_url(env, 'control:event.vouchers'), 'productvar'),
         (_url(env, 'control:event.orders.checkinlists.show', list=env['checkin_list'].pk), 'product'),
         (_url(env, 'control:event.orders.waitinglist'), 'product'),
