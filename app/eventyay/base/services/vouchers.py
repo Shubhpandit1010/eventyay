@@ -19,8 +19,8 @@ def vouchers_send(
     user: int,
     progress=None,
 ) -> None:
-    with scope(event=event):
-        vouchers = list(Voucher.objects.filter(id__in=vouchers).order_by('id'))
+    with scope(organizer=event.organizer, event=event):
+        vouchers = list(Voucher.objects.filter(event=event, id__in=vouchers).order_by('id'))
     user = User.objects.get(pk=user)
     for ir, r in enumerate(recipients):
         voucher_list = []
@@ -45,10 +45,6 @@ def vouchers_send(
             for v in voucher_list:
                 if r.get('tag') and r.get('tag') != v.tag:
                     v.tag = r.get('tag')
-                if v.comment:
-                    v.comment += '\n\n' + sent_msg
-                else:
-                    v.comment = sent_msg
                 logs.append(
                     v.log_action(
                         'eventyay.voucher.sent',
@@ -73,9 +69,12 @@ def vouchers_send(
             if r.get('tag'):
                 update_kwargs['tag'] = r['tag']
 
-            with scope(event=event):
+            with scope(organizer=event.organizer, event=event):
                 if voucher_list:
-                    Voucher.objects.filter(id__in=[v.id for v in voucher_list]).update(**update_kwargs)
+                    Voucher.objects.filter(
+                        event=event,
+                        id__in=[v.id for v in voucher_list],
+                    ).update(**update_kwargs)
                 LogEntry.objects.bulk_create(logs, batch_size=500)
 
             if progress and ir % 50 == 0:
