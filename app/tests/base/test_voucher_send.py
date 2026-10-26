@@ -81,3 +81,38 @@ def test_vouchers_send_atomic_update_prevents_stale_comment_overwrite(env):
 
         v3.refresh_from_db()
         assert v3.comment == 'Staff note updated concurrently\n\nThe voucher has been sent to concurrent@example.com.'
+
+
+@pytest.mark.django_db
+def test_vouchers_send_bulk_prevents_stale_comment_overwrite(env):
+    event, user, v1, v2 = env
+    with scope(organizer=event.organizer, event=event):
+        v3 = event.vouchers.create(comment='Original comment 1', code='BULK1')
+        v4 = event.vouchers.create(comment='Original comment 2', code='BULK2')
+
+        def simulate_concurrent_edit(*args, **kwargs):
+            # Staff member edits voucher comments after vouchers_send has loaded them into memory,
+            # but before the database update executes
+            with scope(organizer=event.organizer, event=event):
+                Voucher.objects.filter(pk=v3.pk).update(comment='Staff note updated concurrently 1')
+                Voucher.objects.filter(pk=v4.pk).update(comment='Staff note updated concurrently 2')
+
+        with patch('eventyay.base.services.vouchers.mail', side_effect=simulate_concurrent_edit):
+            vouchers_send(
+                event=event,
+                vouchers=[v3.pk, v4.pk],
+                subject='Your voucher',
+                message='Here is your voucher: {voucher_list}',
+                recipients=[
+                    {'email': 'recipient1@example.com', 'number': 1},
+                    {'email': 'recipient2@example.com', 'number': 1},
+                ],
+                user=user.pk,
+            )
+
+        v3.refresh_from_db()
+        v4.refresh_from_db()
+        # vouchers_send orders by id and pops vouchers for each recipient:
+        # recipient1 gets v4 (popped first), recipient2 gets v3 (popped second)
+        assert v4.comment == 'Staff note updated concurrently 2\n\nThe voucher has been sent to recipient1@example.com.'
+        assert v3.comment == 'Staff note updated concurrently 1\n\nThe voucher has been sent to recipient2@example.com.'
