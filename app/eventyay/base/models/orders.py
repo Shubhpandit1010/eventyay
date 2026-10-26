@@ -1506,7 +1506,7 @@ class AbstractPosition(models.Model):
     def cache_answers(self, all=True):
         """
         Creates two properties on the object.
-        (1) answ: a dictionary of question.id → answer string
+        (1) answ: a dictionary of question.id â†’ answer string
         (2) questions: a list of Question objects, extended by an 'answer' property
         """
         self.answ = {}
@@ -2535,8 +2535,8 @@ class OrderPosition(AbstractPosition):
 
     def __str__(self):
         if self.variation:
-            return '#{} – {} – {}'.format(self.positionid, str(self.product), str(self.variation))
-        return '#{} – {}'.format(self.positionid, str(self.product))
+            return '#{} â€“ {} â€“ {}'.format(self.positionid, str(self.product), str(self.variation))
+        return '#{} â€“ {}'.format(self.positionid, str(self.product))
 
     def __repr__(self):
         return '<OrderPosition: product %d, variation %d for order %s>' % (
