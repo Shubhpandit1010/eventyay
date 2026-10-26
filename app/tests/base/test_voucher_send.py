@@ -1,4 +1,5 @@
 import datetime
+from unittest.mock import patch
 
 import pytest
 from django_scopes import scope, scopes_disabled
@@ -61,15 +62,22 @@ def test_vouchers_send_atomic_update_prevents_stale_comment_overwrite(env):
     event, user, v1, v2 = env
     with scope(organizer=event.organizer, event=event):
         v3 = event.vouchers.create(comment='Original comment', code='TEST3')
-        # Simulate concurrent staff edit before update
-        Voucher.objects.filter(pk=v3.pk).update(comment='Staff note updated concurrently')
-        vouchers_send(
-            event=event,
-            vouchers=[v3.pk],
-            subject='Your voucher',
-            message='Here is your voucher: {voucher_list}',
-            recipients=[{'email': 'concurrent@example.com', 'number': 1}],
-            user=user.pk,
-        )
+
+        def simulate_concurrent_edit(*args, **kwargs):
+            # Staff member edits voucher comment after vouchers_send has loaded it into memory,
+            # but before the database update executes
+            with scope(organizer=event.organizer, event=event):
+                Voucher.objects.filter(pk=v3.pk).update(comment='Staff note updated concurrently')
+
+        with patch('eventyay.base.services.vouchers.mail', side_effect=simulate_concurrent_edit):
+            vouchers_send(
+                event=event,
+                vouchers=[v3.pk],
+                subject='Your voucher',
+                message='Here is your voucher: {voucher_list}',
+                recipients=[{'email': 'concurrent@example.com', 'number': 1}],
+                user=user.pk,
+            )
+
         v3.refresh_from_db()
         assert v3.comment == 'Staff note updated concurrently\n\nThe voucher has been sent to concurrent@example.com.'
