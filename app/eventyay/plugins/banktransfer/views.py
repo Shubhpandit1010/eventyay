@@ -65,9 +65,10 @@ class ActionView(View):
     def _accept_ignore_amount(self, trans):
         if trans.amount < Decimal('0.00'):
             existing_ref = None
-            for r_cand in trans.order.refunds.filter(provider='banktransfer'):
+            for r_cand in trans.order.refunds.all():
                 try:
-                    if r_cand.info_data.get('trans_id') == trans.pk:
+                    cand_id = r_cand.info_data.get('trans_id')
+                    if cand_id is not None and str(cand_id) == str(trans.pk):
                         existing_ref = r_cand
                         break
                 except (ValueError, TypeError, AttributeError):

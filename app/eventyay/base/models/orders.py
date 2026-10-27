@@ -2063,11 +2063,11 @@ class OrderPayment(models.Model):
         :type info: str
         :return: OrderRefund
         """
-        with scope(event=self.order.event):
+        with scope(organizer=self.order.event.organizer, event=self.order.event):
             # Serialize refund creation and balance checking per order
             locked_order = Order.objects.select_for_update().get(pk=self.order.pk)
             self.order = locked_order
-    
+
             # Idempotency check: if info specifies a transaction ID, check for existing refund
             trans_id = None
             if info:
@@ -2076,15 +2076,16 @@ class OrderPayment(models.Model):
                     trans_id = info_dict.get('trans_id')
                 except (ValueError, TypeError, AttributeError):
                     pass
-    
+
             if trans_id is not None:
-                for existing_refund in self.order.refunds.filter(provider=self.provider):
+                for existing_refund in self.order.refunds.all():
                     try:
-                        if existing_refund.info_data.get('trans_id') == trans_id:
+                        cand_id = existing_refund.info_data.get('trans_id')
+                        if cand_id is not None and str(cand_id) == str(trans_id):
                             return existing_refund
                     except (ValueError, TypeError, AttributeError):
                         continue
-    
+
             r = self.order.refunds.create(
                 state=OrderRefund.REFUND_STATE_EXTERNAL,
                 source=OrderRefund.REFUND_SOURCE_EXTERNAL,
@@ -2102,16 +2103,39 @@ class OrderPayment(models.Model):
                     'provider': r.provider,
                 },
             )
-    
-            # Include existing external refunds when determining whether this refund settles the remaining overpayment
-            existing_external_refunds = self.order.refunds.filter(state=OrderRefund.REFUND_STATE_EXTERNAL).exclude(pk=r.pk)
-            existing_external_sum = existing_external_refunds.aggregate(s=Sum('amount'))['s'] or Decimal('0.00')
-    
-            if self.order.pending_sum + existing_external_sum + r.amount == Decimal('0.00'):
+
+            # Evaluate existing external refunds into a concrete list before iterating to avoid queryset mutation side effects
+            existing_external_refunds = list(
+                self.order.refunds.filter(state=OrderRefund.REFUND_STATE_EXTERNAL).exclude(pk=r.pk)
+            )
+            existing_external_sum = sum((prior.amount for prior in existing_external_refunds), Decimal('0.00'))
+
+            if self.order.pending_sum + r.amount == Decimal('0.00'):
+                r.done()
+            elif self.order.pending_sum + existing_external_sum + r.amount == Decimal('0.00'):
                 for prior_refund in existing_external_refunds:
                     prior_refund.done()
                 r.done()
-    
+            else:
+                target_amount = -self.order.pending_sum
+                if target_amount > Decimal('0.00'):
+                    sorted_priors = sorted(
+                        existing_external_refunds,
+                        key=lambda x: (x.payment_id != self.pk, x.pk),
+                    )
+                    accumulated = r.amount
+                    settled_priors = []
+                    for prior in sorted_priors:
+                        if accumulated + prior.amount <= target_amount:
+                            accumulated += prior.amount
+                            settled_priors.append(prior)
+                            if accumulated == target_amount:
+                                break
+                    if accumulated == target_amount:
+                        for prior in settled_priors:
+                            prior.done()
+                        r.done()
+
             return r
 
 

@@ -1969,11 +1969,33 @@ class OrderTestCase(BaseQuotaTestCase):
         r1.refresh_from_db()
         assert r1.state == OrderRefund.REFUND_STATE_EXTERNAL
 
-        # Second refund attempts to refund the full 20.00 overpayment
-        # Total refunds would be 30.00 > 20.00 overpayment; should not mark done
-        r2 = p.create_external_refund(amount=Decimal('20.00'))
+        # Second refund attempts to refund 15.00
+        # Total refunds would be 25.00 > 20.00 overpayment, and 15.00 != 20.00; neither clears balance alone or together
+        r2 = p.create_external_refund(amount=Decimal('15.00'))
         r2.refresh_from_db()
         assert r2.state == OrderRefund.REFUND_STATE_EXTERNAL
+
+    @classscope(attr='o', event_attr='event')
+    def test_external_refund_settles_balance_alone_while_prior_external_pending(self):
+        p = self.order.payments.create(
+            provider='manual',
+            amount=Decimal('66.00'),
+            state=OrderPayment.PAYMENT_STATE_CONFIRMED,
+        )
+        assert self.order.pending_sum == Decimal('-20.00')
+
+        # First partial external refund of 10.00 (stays external)
+        r1 = p.create_external_refund(amount=Decimal('10.00'))
+        r1.refresh_from_db()
+        assert r1.state == OrderRefund.REFUND_STATE_EXTERNAL
+
+        # Second refund settles exact overpayment on its own (20.00 == -pending_sum) while r1 is pending
+        r2 = p.create_external_refund(amount=Decimal('20.00'))
+        r2.refresh_from_db()
+        assert r2.state == OrderRefund.REFUND_STATE_DONE
+        r1.refresh_from_db()
+        assert r1.state == OrderRefund.REFUND_STATE_EXTERNAL
+        assert self.order.pending_sum == Decimal('0.00')
 
     @classscope(attr='o', event_attr='event')
     def test_external_refund_multiple_partial_together_clear_balance(self):
@@ -1997,16 +2019,24 @@ class OrderTestCase(BaseQuotaTestCase):
 
     @classscope(attr='o', event_attr='event')
     def test_external_refund_idempotent_with_trans_id(self):
-        p = self.order.payments.create(
+        p1 = self.order.payments.create(
             provider='manual',
             amount=Decimal('66.00'),
             state=OrderPayment.PAYMENT_STATE_CONFIRMED,
         )
-        info = json.dumps({'trans_id': 9999, 'reference': 'TEST'})
-        r1 = p.create_external_refund(amount=Decimal('10.00'), info=info)
-        r2 = p.create_external_refund(amount=Decimal('10.00'), info=info)
+        p2 = self.order.payments.create(
+            provider='banktransfer',
+            amount=Decimal('66.00'),
+            state=OrderPayment.PAYMENT_STATE_CONFIRMED,
+        )
+        # r1 created on p1 with integer trans_id
+        info1 = json.dumps({'trans_id': 9999, 'reference': 'TEST'})
+        r1 = p1.create_external_refund(amount=Decimal('10.00'), info=info1)
+        # r2 called on p2 with string trans_id and different provider
+        info2 = json.dumps({'trans_id': '9999', 'reference': 'TEST'})
+        r2 = p2.create_external_refund(amount=Decimal('10.00'), info=info2)
         assert r1.pk == r2.pk
-        assert self.order.refunds.filter(provider='manual').count() == 1
+        assert self.order.refunds.count() == 1
 
     @classscope(attr='o', event_attr='event')
     def test_external_refund_handles_non_object_or_malformed_info(self):
