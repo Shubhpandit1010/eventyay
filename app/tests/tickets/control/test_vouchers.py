@@ -609,7 +609,7 @@ class VoucherFormTest(SoupTestMixin, TransactionTestCase):
                 'send_recipients': 'vip1@example.com\nvip2@example.com',
             }
         )
-        with scope(event=self.event):
+        with scope(organizer=self.orga, event=self.event):
             v1 = self.event.vouchers.get(code='COMM1')
             v2 = self.event.vouchers.get(code='COMM2')
         assert v1.comment == 'Reserved for VIP\n\nThe voucher has been sent to vip2@example.com.'

@@ -1,3 +1,4 @@
+from django.db import transaction
 from django.db.models import Case, Q, TextField, Value, When
 from django.db.models.functions import Concat
 from django.utils.translation import gettext
@@ -69,7 +70,7 @@ def vouchers_send(
             if r.get('tag'):
                 update_kwargs['tag'] = r['tag']
 
-            with scope(organizer=event.organizer, event=event):
+            with scope(organizer=event.organizer, event=event), transaction.atomic():
                 if voucher_list:
                     Voucher.objects.filter(
                         event=event,
